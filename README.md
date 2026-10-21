@@ -81,3 +81,9 @@ Para cada día se aplica el siguiente procedimiento:
 | Ahorro relativo | — | [PENDIENTE] % | [PENDIENTE] % | Reducción del coste frente a la operación actual |
 
 Además del resultado anual, se analizará la **evolución mensual del ahorro**, las horas más utilizadas por el optimizador y los factores que explican las diferencias de ahorro entre días.
+
+## 6. Dashboard Streamlit en EC2
+
+El dashboard consume exclusivamente `gold_plan_horario.parquet` y `gold_resumen_diario.parquet` desde `s3://energy-optimizer-grupo4/outputs/`, en `eu-north-1`, utilizando las credenciales AWS disponibles en la EC2.
+
+La configuración, los permisos IAM necesarios y las instrucciones de ejecución se describen en [app/README.md](app/README.md). El acceso a la instancia mediante Session Manager no sustituye los permisos de lectura sobre S3.

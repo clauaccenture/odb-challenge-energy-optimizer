@@ -1,4 +1,4 @@
-"""Energy Optimizer dashboard backed by local Gold CSV results."""
+"""Energy Optimizer dashboard backed by Gold Parquet results in S3."""
 
 from __future__ import annotations
 
@@ -8,8 +8,10 @@ from textwrap import dedent
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from botocore.exceptions import BotoCoreError, ClientError
+from pyarrow import ArrowException
 
-from data_loader import DEFAULT_DATA_DIR, load_gold_tables, monthly_results
+from data_loader import GOLD_S3_URI, load_gold_tables, monthly_results
 
 
 st.set_page_config(
@@ -369,13 +371,19 @@ def render_analysis(monthly: pd.DataFrame) -> None:
         markup('<div role="list">' + "".join(rows) + '</div>')
 
 
+@st.cache_data(ttl=300, max_entries=1, show_spinner="Cargando tablas Gold desde S3...")
+def cached_gold_tables() -> tuple[pd.DataFrame, pd.DataFrame]:
+    return load_gold_tables()
+
+
 def main() -> None:
     apply_styles()
     try:
-        plan, summary = load_gold_tables()
-    except (OSError, ValueError, KeyError) as error:
+        plan, summary = cached_gold_tables()
+    except (BotoCoreError, ClientError, ArrowException, OSError, ValueError, KeyError) as error:
         st.error(f"No se pudieron cargar las tablas Gold: {error}")
-        st.caption(f"Carpeta local: {DEFAULT_DATA_DIR}")
+        st.caption(f"Origen S3: {GOLD_S3_URI}")
+        st.info("Comprueba las credenciales AWS de la EC2, los permisos s3:GetObject y la existencia de ambos Parquet.")
         st.stop()
     with st.sidebar:
         markup("""
@@ -389,10 +397,14 @@ def main() -> None:
         selected_year = st.selectbox("Año de resultados", years, key="selected_year")
         st.divider()
         markup("""
-            <div class="source-box"><div class="source-title">Fuente de datos</div><div class="source-row"><span>REData · precios</span><span class="source-state">Gold local</span></div></div>
-            <div class="sidebar-note">gold_plan_horario.csv<br>gold_resumen_diario.csv<br>Zona horaria: Europe/Madrid</div>
+            <div class="source-box"><div class="source-title">Fuente de datos</div><div class="source-row"><span>REData · precios</span><span class="source-state">Gold S3</span></div></div>
+            <div class="sidebar-note">gold_plan_horario.parquet<br>gold_resumen_diario.parquet<br>Zona horaria: Europe/Madrid</div>
         """)
-        st.caption(f"Carpeta de lectura: {DEFAULT_DATA_DIR}")
+        st.caption(f"Origen S3: {GOLD_S3_URI}")
+        if st.button("Actualizar datos de S3"):
+            cached_gold_tables.clear()
+            st.rerun()
+        st.caption("Caché de datos: 5 minutos. Actualiza tras completar la subida de ambos Parquet.")
     summary = summary[summary["fecha_local"].map(lambda value: value.year == selected_year)].copy()
     daily = summary[summary["estado_optimizacion"] == "optimo"].copy()
     first, last = summary["fecha_local"].min(), summary["fecha_local"].max()
@@ -404,7 +416,7 @@ def main() -> None:
         VIEWS[2]: "Ahorro acumulado y contribución mensual de la programación optimizada.",
     }
     markup(f"""
-        <div class="topline"><div class="crumb">Energía / <strong>Resultados</strong></div><div class="data-badge">TABLAS GOLD · CSV LOCAL</div></div>
+        <div class="topline"><div class="crumb">Energía / <strong>Resultados</strong></div><div class="data-badge">TABLAS GOLD · PARQUET S3</div></div>
         <header class="page-heading"><div><div class="eyebrow">Caso 4 · Carga flexible industrial</div><h1>{view}</h1><p class="heading-sub">{subtitles[view]}</p></div><div class="period-tag">{coverage}</div></header>
     """)
     st.info(f"Cobertura disponible: {len(daily)} días válidos de {calendar_days} días naturales entre las fechas cargadas; {len(summary) - len(daily)} días excluidos por estado y {calendar_days - len(summary)} sin registro. Los totales no se anualizan ni representan necesariamente meses completos.")
