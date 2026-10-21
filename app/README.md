@@ -51,6 +51,10 @@ No se descargan fuentes de REData, no se recalcula la optimización y no se escr
 2. **Programación diaria**: intervalos locales, precios, consumos y costes S0/S1, parámetros del escenario y descarga del plan seleccionado.
 3. **Evolución del ahorro**: acumulado, aportación mensual y filtro trimestral. Un trimestre sin registros muestra ausencia de resultados, no ahorro cero.
 
+La fecha de programación se selecciona mediante el mismo calendario mensual en el resumen ejecutivo y en la programación diaria. Al pulsar la fecha se abre el calendario; el selector de mes permite recorrer el año elegido en la barra lateral.
+
+Solo están habilitados los días presentes en el resumen con `estado_optimizacion=optimo`. Se deshabilitan tanto los días anteriores o posteriores a la cobertura como los huecos intermedios sin programación válida. Por ejemplo, con datos hasta el 30 de septiembre de 2026, el 1 de octubre y el 24 de diciembre de 2026 aparecen deshabilitados. El límite se obtiene de Gold, no de la fecha actual del sistema. Al cambiar de año se conserva la fecha si sigue disponible; en caso contrario, se selecciona el primer día válido.
+
 Se conservan las validaciones de columnas obligatorias, fechas, estados, valores numéricos finitos, horas completas del día local, energía objetivo, límite horario, costes precio por consumo y coherencia entre plan y resumen.
 
 Las horas se obtienen de `datetime_local`, con conversión a `Europe/Madrid`. Se conservan los días de 23, 24 y 25 horas. `fecha_local` procede de la fecha local generada en Gold; no se requiere `datetime_utc`.

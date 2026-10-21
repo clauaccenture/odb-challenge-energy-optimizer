@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from calendar import Calendar
 from datetime import date
 from textwrap import dedent
 
@@ -187,8 +188,43 @@ def kpi(label: str, value: str, foot: str, emphasis: bool = False, unit: str = "
            f'<div class="kpi-foot">{foot}</div></article>')
 
 
-def save_selected_date() -> None:
-    st.session_state.selected_date = st.session_state.dispatch_date
+def save_selected_date(selected_date: date) -> None:
+    st.session_state.selected_date = selected_date
+
+
+def render_date_picker(dates: list[date]) -> date:
+    selected_date = st.session_state.selected_date
+    available_dates = set(dates)
+    months = [date(selected_date.year, month, 1) for month in range(1, 13)]
+    if st.session_state.get("schedule_month") not in months:
+        st.session_state.schedule_month = selected_date.replace(day=1)
+    st.caption("Día de programación")
+    with st.popover(format_date(selected_date), icon=":material/calendar_month:", width="stretch"):
+        month = st.selectbox(
+            "Mes del calendario", months, key="schedule_month",
+            format_func=lambda value: f"{MONTH_NAMES[value.month - 1]} {value.year}",
+        )
+        for column, name in zip(st.columns(7), ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]):
+            column.caption(name)
+        for week in Calendar(firstweekday=0).monthdatescalendar(month.year, month.month):
+            for column, day in zip(st.columns(7), week):
+                available = day.month == month.month and day in available_dates
+                with column:
+                    st.button(
+                        str(day.day),
+                        key=f"schedule_day_{day.isoformat()}",
+                        disabled=not available,
+                        type="primary" if day == selected_date else "secondary",
+                        help=(
+                            f"Ver programación del {day:%d/%m/%Y}"
+                            if available else f"{day:%d/%m/%Y}: sin programación disponible en este mes"
+                        ),
+                        on_click=save_selected_date,
+                        args=(day,),
+                        width="stretch",
+                    )
+        st.caption("Solo se pueden seleccionar los días con estado óptimo del año elegido. Los demás están deshabilitados.")
+    return selected_date
 
 
 def open_daily_schedule() -> None:
@@ -256,11 +292,9 @@ def render_summary(monthly: pd.DataFrame, daily: pd.DataFrame) -> None:
                '<p class="panel-subtitle">Fechas con programación disponible · Europe/Madrid</p>'
                f'<p class="date-preview">Programación horaria · {format_date(st.session_state.selected_date)}</p>')
     with date_column:
-        if st.session_state.get("dispatch_date") not in dates:
-            st.session_state.dispatch_date = st.session_state.selected_date
-        st.selectbox("Día de programación", dates, key="dispatch_date", on_change=save_selected_date, format_func=format_date)
+        render_date_picker(dates)
     with button_column:
-        st.button("Ver programación diaria →", type="primary", on_click=open_daily_schedule, use_container_width=True)
+        st.button("Ver programación diaria →", type="primary", on_click=open_daily_schedule, width="stretch")
 
 
 def render_daily_schedule(schedule: pd.DataFrame, totals: pd.Series) -> None:
@@ -431,10 +465,7 @@ def main() -> None:
     if view == VIEWS[0]:
         render_summary(monthly, daily)
     elif view == VIEWS[1]:
-        if st.session_state.get("daily_date") not in dates:
-            st.session_state.daily_date = st.session_state.selected_date
-        selected_date = st.selectbox("Día de programación", dates, key="daily_date", format_func=format_date)
-        st.session_state.selected_date = selected_date
+        selected_date = render_date_picker(dates)
         schedule = plan[plan["fecha_local"] == selected_date]
         totals = daily.loc[daily["fecha_local"] == selected_date].iloc[0]
         render_daily_schedule(schedule, totals)
