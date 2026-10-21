@@ -1,10 +1,12 @@
 """03 - Gold: plan horario y resumen diario del caso 4 (Energy Optimizer).
  
 Entrada : data/processed/precios_horarios.json  (silver: precio spot por hora)
-Salida  : dos tablas en data/outputs/
-            gold_plan_horario.csv     una fila por hora
-            gold_resumen_diario.csv   una fila por dia local
+Salida  : dos tablas en formato Parquet en data/outputs/
+            gold_plan_horario.parquet     una fila por hora
+            gold_resumen_diario.parquet   una fila por dia local
           y, si S3_BUCKET esta definido, se suben a s3://<bucket>/outputs/.
+          Tipos: datetime_local es un timestamp con zona Europe/Madrid (distingue las
+          dos 02:00 del dia de 25 horas) y fecha_local es una fecha.
  
 Para cada dia LOCAL (Europe/Madrid, con 23, 24 o 25 horas reales):
     - Baseline:   2,5 MWh por hora de 08:00 a 20:00 (sin incluir la hora que empieza
@@ -21,8 +23,8 @@ Para cada dia LOCAL (Europe/Madrid, con 23, 24 o 25 horas reales):
 Los precios vienen de la API (via silver); los consumos son el escenario del reto.
  
 Uso (desde la raiz del repo):
-    python notebooks/03_gold.py
-    python notebooks/03_gold.py --no-s3
+    python notebooks/03_gold_redata.py
+    python notebooks/03_gold_redata.py --no-s3
 """
 import argparse
 import json
@@ -101,7 +103,7 @@ def build_gold(silver: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     for fecha, dia in silver.groupby("fecha_local", sort=True):
         n = len(dia)
         fila = {
-            "fecha_local": str(fecha),
+            "fecha_local": fecha,
             "horas_del_dia": n,
             "energia_flexible_objetivo_mwh": ENERGIA_DIARIA_MWH,
             "limite_flexible_mwh_por_hora": LIMITE_MWH_HORA,
@@ -137,23 +139,24 @@ def build_gold(silver: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
         })
         resumenes.append(fila)
  
+    if not planes:
+        raise ValueError("Ningun dia se ha podido optimizar: revisa el silver (dias incompletos)")
     plan = pd.concat(planes, ignore_index=True)
-    plan["datetime_utc"] = plan["datetime_utc"].map(lambda t: t.isoformat())
-    plan["datetime_local"] = plan["datetime_local"].map(lambda t: t.isoformat())
-    plan["fecha_local"] = plan["fecha_local"].astype(str)
+    # datetime_utc se usa solo internamente (orden y desempate); no se incluye en la salida.
+    # datetime_local (con su desfase) sigue siendo unico por fila.
     plan = plan[[
-        "datetime_utc", "datetime_local", "fecha_local", "precio_eur_mwh",
+        "datetime_local", "fecha_local", "precio_eur_mwh",
         "consumo_baseline_mwh", "consumo_optimizado_mwh",
         "coste_baseline_eur", "coste_optimizado_eur",
     ]]
  
-    resumen = pd.DataFrame(resumenes)[[
+    resumen = pd.DataFrame(resumenes).reindex(columns=[
         "fecha_local", "horas_del_dia", "energia_flexible_objetivo_mwh",
         "limite_flexible_mwh_por_hora", "politica_negativos", "estado_optimizacion",
         "consumo_baseline_total_mwh", "consumo_optimizado_total_mwh",
         "coste_baseline_total_eur", "coste_optimizado_total_eur",
         "ahorro_eur", "ahorro_pct",
-    ]]
+    ])
     return plan, resumen
  
  
@@ -171,20 +174,22 @@ def main() -> None:
     args = ap.parse_args()
  
     if not SILVER.exists():
-        raise FileNotFoundError(f"No existe {SILVER}. Ejecuta antes 02_calidad.py")
+        raise FileNotFoundError(f"No existe {SILVER}. Ejecuta antes 02_calidad_redata.py")
     plan, resumen = build_gold(load_silver(SILVER))
  
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    plan_path = OUT_DIR / "gold_plan_horario.csv"
-    resumen_path = OUT_DIR / "gold_resumen_diario.csv"
-    plan.to_csv(plan_path, index=False)
-    resumen.to_csv(resumen_path, index=False)
+    plan_path = OUT_DIR / "gold_plan_horario.parquet"
+    resumen_path = OUT_DIR / "gold_resumen_diario.parquet"
+    plan.to_parquet(plan_path, index=False)
+    resumen.to_parquet(resumen_path, index=False)
  
     ok = resumen[resumen["estado_optimizacion"] == "optimo"]
     print(f"Dias: {len(resumen)} (optimos: {len(ok)}) | horas en el plan: {len(plan)}")
     if len(ok):
-        print(f"Ahorro total: {ok['ahorro_eur'].sum():.2f} EUR | "
-              f"ahorro medio diario: {ok['ahorro_pct'].mean():.2f} %")
+        # % ponderado: ahorro total / coste baseline total (la media de los % diarios
+        # se distorsiona con dias de precios casi 0, donde el % sale ~100 %)
+        pct = 100 * ok["ahorro_eur"].sum() / ok["coste_baseline_total_eur"].sum()
+        print(f"Ahorro total: {ok['ahorro_eur'].sum():.2f} EUR | ahorro ponderado: {pct:.2f} %")
     print(f"Guardado {plan_path} y {resumen_path}")
     if BUCKET and not args.no_s3:
         upload_s3(plan_path)
