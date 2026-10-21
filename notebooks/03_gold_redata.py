@@ -1,31 +1,3 @@
-"""03 - Gold: plan horario y resumen diario del caso 4 (Energy Optimizer).
- 
-Entrada : data/processed/precios_horarios.json  (silver: precio spot por hora)
-Salida  : dos tablas en formato Parquet en data/outputs/
-            gold_plan_horario.parquet     una fila por hora
-            gold_resumen_diario.parquet   una fila por dia local
-          y, si S3_BUCKET esta definido, se suben a s3://<bucket>/outputs/.
-          Tipos: datetime_local es un timestamp con zona Europe/Madrid (distingue las
-          dos 02:00 del dia de 25 horas) y fecha_local es una fecha.
- 
-Para cada dia LOCAL (Europe/Madrid, con 23, 24 o 25 horas reales):
-    - Baseline:   2,5 MWh por hora de 08:00 a 20:00 (sin incluir la hora que empieza
-                  a las 20:00) -> 12 horas x 2,5 = 30 MWh
-    - Optimizado: los mismos 30 MWh, con un maximo de 7 MWh por hora, ocupando
-                  las horas de la mas barata a la mas cara en franjas de 7 MWh
-                  (7 + 7 + 7 + 7 + 2). Optimo para este problema lineal sin mas
-                  restricciones; no hace falta PuLP.
-                  Desempate de precios iguales: 1) hora dentro de la franja
-                  08:00-17:00, 2) la mas temprana.
-    - Coste = precio_eur_mwh x consumo. Solo componente de mercado: sin peajes,
-              cargos ni impuestos.
- 
-Los precios vienen de la API (via silver); los consumos son el escenario del reto.
- 
-Uso (desde la raiz del repo):
-    python notebooks/03_gold_redata.py
-    python notebooks/03_gold_redata.py --no-s3
-"""
 import argparse
 import json
 import os
@@ -37,7 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
  
 BUCKET = os.getenv("S3_BUCKET")
-SILVER = Path("data/processed/precios_horarios.json")
+SILVER = Path("data/processed/redata/precios_horarios.json")
 OUT_DIR = Path("data/outputs")
 SPOT_TITLE = "Precio mercado spot"
 TZ_LOCAL = "Europe/Madrid"
