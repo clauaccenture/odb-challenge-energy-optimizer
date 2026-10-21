@@ -1,16 +1,21 @@
-"""Read and validate the local Gold tables consumed by the dashboard."""
+"""Read and validate the Gold Parquet tables stored in S3."""
 
 from __future__ import annotations
 
-from pathlib import Path
+from contextlib import closing
+from io import BytesIO
 
+import boto3
 import numpy as np
 import pandas as pd
 
 
-DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2]
-PLAN_FILENAME = "gold_plan_horario.csv"
-SUMMARY_FILENAME = "gold_resumen_diario.csv"
+S3_BUCKET = "energy-optimizer-grupo4"
+S3_PREFIX = "outputs"
+S3_REGION = "eu-north-1"
+GOLD_S3_URI = f"s3://{S3_BUCKET}/{S3_PREFIX}/"
+PLAN_FILENAME = "gold_plan_horario.parquet"
+SUMMARY_FILENAME = "gold_resumen_diario.parquet"
 TIMEZONE = "Europe/Madrid"
 PLAN_NUMERIC = [
 	"precio_eur_mwh", "consumo_baseline_mwh", "consumo_optimizado_mwh",
@@ -24,11 +29,16 @@ SUMMARY_TOTALS = {
 }
 
 
-def read_table(path: Path, required: list[str]) -> pd.DataFrame:
-	table = pd.read_csv(path)
+def read_table(filename: str, required: list[str]) -> pd.DataFrame:
+	response = boto3.client("s3", region_name=S3_REGION).get_object(
+		Bucket=S3_BUCKET,
+		Key=f"{S3_PREFIX}/{filename}",
+	)
+	with closing(response["Body"]) as body:
+		table = pd.read_parquet(BytesIO(body.read()), engine="pyarrow")
 	missing = set(required) - set(table.columns)
 	if missing:
-		raise ValueError(f"{path.name}: faltan columnas: {', '.join(sorted(missing))}.")
+		raise ValueError(f"{filename}: faltan columnas: {', '.join(sorted(missing))}.")
 	return table.loc[:, required].copy()
 
 
@@ -39,10 +49,10 @@ def numeric_columns(table: pd.DataFrame, columns: list[str], name: str) -> None:
 			raise ValueError(f"{name}: {column} contiene valores vacíos o no finitos.")
 
 
-def load_gold_tables(data_dir: Path = DEFAULT_DATA_DIR) -> tuple[pd.DataFrame, pd.DataFrame]:
+def load_gold_tables() -> tuple[pd.DataFrame, pd.DataFrame]:
 	"""Load matching hourly and daily results; timestamps come from local time."""
-	plan = read_table(data_dir / PLAN_FILENAME, ["datetime_local", "fecha_local", *PLAN_NUMERIC])
-	summary = read_table(data_dir / SUMMARY_FILENAME, [
+	plan = read_table(PLAN_FILENAME, ["datetime_local", "fecha_local", *PLAN_NUMERIC])
+	summary = read_table(SUMMARY_FILENAME, [
 		"fecha_local", "horas_del_dia", "energia_flexible_objetivo_mwh",
 		"limite_flexible_mwh_por_hora", "politica_negativos", "estado_optimizacion",
 		*SUMMARY_TOTALS, "ahorro_eur", "ahorro_pct",

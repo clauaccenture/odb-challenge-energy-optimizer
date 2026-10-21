@@ -1,15 +1,18 @@
-"""Energy Optimizer dashboard backed by local Gold CSV results."""
+"""Energy Optimizer dashboard backed by Gold Parquet results in S3."""
 
 from __future__ import annotations
 
+from calendar import Calendar
 from datetime import date
 from textwrap import dedent
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from botocore.exceptions import BotoCoreError, ClientError
+from pyarrow import ArrowException
 
-from data_loader import DEFAULT_DATA_DIR, load_gold_tables, monthly_results
+from data_loader import GOLD_S3_URI, load_gold_tables, monthly_results
 
 
 st.set_page_config(
@@ -185,8 +188,43 @@ def kpi(label: str, value: str, foot: str, emphasis: bool = False, unit: str = "
            f'<div class="kpi-foot">{foot}</div></article>')
 
 
-def save_selected_date() -> None:
-    st.session_state.selected_date = st.session_state.dispatch_date
+def save_selected_date(selected_date: date) -> None:
+    st.session_state.selected_date = selected_date
+
+
+def render_date_picker(dates: list[date]) -> date:
+    selected_date = st.session_state.selected_date
+    available_dates = set(dates)
+    months = [date(selected_date.year, month, 1) for month in range(1, 13)]
+    if st.session_state.get("schedule_month") not in months:
+        st.session_state.schedule_month = selected_date.replace(day=1)
+    st.caption("Día de programación")
+    with st.popover(format_date(selected_date), icon=":material/calendar_month:", width="stretch"):
+        month = st.selectbox(
+            "Mes del calendario", months, key="schedule_month",
+            format_func=lambda value: f"{MONTH_NAMES[value.month - 1]} {value.year}",
+        )
+        for column, name in zip(st.columns(7), ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]):
+            column.caption(name)
+        for week in Calendar(firstweekday=0).monthdatescalendar(month.year, month.month):
+            for column, day in zip(st.columns(7), week):
+                available = day.month == month.month and day in available_dates
+                with column:
+                    st.button(
+                        str(day.day),
+                        key=f"schedule_day_{day.isoformat()}",
+                        disabled=not available,
+                        type="primary" if day == selected_date else "secondary",
+                        help=(
+                            f"Ver programación del {day:%d/%m/%Y}"
+                            if available else f"{day:%d/%m/%Y}: sin programación disponible en este mes"
+                        ),
+                        on_click=save_selected_date,
+                        args=(day,),
+                        width="stretch",
+                    )
+        st.caption("Solo se pueden seleccionar los días con estado óptimo del año elegido. Los demás están deshabilitados.")
+    return selected_date
 
 
 def open_daily_schedule() -> None:
@@ -254,11 +292,9 @@ def render_summary(monthly: pd.DataFrame, daily: pd.DataFrame) -> None:
                '<p class="panel-subtitle">Fechas con programación disponible · Europe/Madrid</p>'
                f'<p class="date-preview">Programación horaria · {format_date(st.session_state.selected_date)}</p>')
     with date_column:
-        if st.session_state.get("dispatch_date") not in dates:
-            st.session_state.dispatch_date = st.session_state.selected_date
-        st.selectbox("Día de programación", dates, key="dispatch_date", on_change=save_selected_date, format_func=format_date)
+        render_date_picker(dates)
     with button_column:
-        st.button("Ver programación diaria →", type="primary", on_click=open_daily_schedule, use_container_width=True)
+        st.button("Ver programación diaria →", type="primary", on_click=open_daily_schedule, width="stretch")
 
 
 def render_daily_schedule(schedule: pd.DataFrame, totals: pd.Series) -> None:
@@ -369,13 +405,19 @@ def render_analysis(monthly: pd.DataFrame) -> None:
         markup('<div role="list">' + "".join(rows) + '</div>')
 
 
+@st.cache_data(ttl=300, max_entries=1, show_spinner="Cargando tablas Gold desde S3...")
+def cached_gold_tables() -> tuple[pd.DataFrame, pd.DataFrame]:
+    return load_gold_tables()
+
+
 def main() -> None:
     apply_styles()
     try:
-        plan, summary = load_gold_tables()
-    except (OSError, ValueError, KeyError) as error:
+        plan, summary = cached_gold_tables()
+    except (BotoCoreError, ClientError, ArrowException, OSError, ValueError, KeyError) as error:
         st.error(f"No se pudieron cargar las tablas Gold: {error}")
-        st.caption(f"Carpeta local: {DEFAULT_DATA_DIR}")
+        st.caption(f"Origen S3: {GOLD_S3_URI}")
+        st.info("Comprueba las credenciales AWS de la EC2, los permisos s3:GetObject y la existencia de ambos Parquet.")
         st.stop()
     with st.sidebar:
         markup("""
@@ -389,10 +431,14 @@ def main() -> None:
         selected_year = st.selectbox("Año de resultados", years, key="selected_year")
         st.divider()
         markup("""
-            <div class="source-box"><div class="source-title">Fuente de datos</div><div class="source-row"><span>REData · precios</span><span class="source-state">Gold local</span></div></div>
-            <div class="sidebar-note">gold_plan_horario.csv<br>gold_resumen_diario.csv<br>Zona horaria: Europe/Madrid</div>
+            <div class="source-box"><div class="source-title">Fuente de datos</div><div class="source-row"><span>REData · precios</span><span class="source-state">Gold S3</span></div></div>
+            <div class="sidebar-note">gold_plan_horario.parquet<br>gold_resumen_diario.parquet<br>Zona horaria: Europe/Madrid</div>
         """)
-        st.caption(f"Carpeta de lectura: {DEFAULT_DATA_DIR}")
+        st.caption(f"Origen S3: {GOLD_S3_URI}")
+        if st.button("Actualizar datos de S3"):
+            cached_gold_tables.clear()
+            st.rerun()
+        st.caption("Caché de datos: 5 minutos. Actualiza tras completar la subida de ambos Parquet.")
     summary = summary[summary["fecha_local"].map(lambda value: value.year == selected_year)].copy()
     daily = summary[summary["estado_optimizacion"] == "optimo"].copy()
     first, last = summary["fecha_local"].min(), summary["fecha_local"].max()
@@ -404,7 +450,7 @@ def main() -> None:
         VIEWS[2]: "Ahorro acumulado y contribución mensual de la programación optimizada.",
     }
     markup(f"""
-        <div class="topline"><div class="crumb">Energía / <strong>Resultados</strong></div><div class="data-badge">TABLAS GOLD · CSV LOCAL</div></div>
+        <div class="topline"><div class="crumb">Energía / <strong>Resultados</strong></div><div class="data-badge">TABLAS GOLD · PARQUET S3</div></div>
         <header class="page-heading"><div><div class="eyebrow">Caso 4 · Carga flexible industrial</div><h1>{view}</h1><p class="heading-sub">{subtitles[view]}</p></div><div class="period-tag">{coverage}</div></header>
     """)
     st.info(f"Cobertura disponible: {len(daily)} días válidos de {calendar_days} días naturales entre las fechas cargadas; {len(summary) - len(daily)} días excluidos por estado y {calendar_days - len(summary)} sin registro. Los totales no se anualizan ni representan necesariamente meses completos.")
@@ -419,10 +465,7 @@ def main() -> None:
     if view == VIEWS[0]:
         render_summary(monthly, daily)
     elif view == VIEWS[1]:
-        if st.session_state.get("daily_date") not in dates:
-            st.session_state.daily_date = st.session_state.selected_date
-        selected_date = st.selectbox("Día de programación", dates, key="daily_date", format_func=format_date)
-        st.session_state.selected_date = selected_date
+        selected_date = render_date_picker(dates)
         schedule = plan[plan["fecha_local"] == selected_date]
         totals = daily.loc[daily["fecha_local"] == selected_date].iloc[0]
         render_daily_schedule(schedule, totals)
