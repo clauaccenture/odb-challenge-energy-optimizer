@@ -304,18 +304,26 @@ def cached_temperature_table() -> pd.DataFrame:
 
 def render_daily_temperature(selected_date: date) -> None:
     with st.container(border=True):
-        panel_heading("Temperatura diaria · España", f"AEMET · resumen nacional · {format_date(selected_date)}")
+        panel_heading("Temperatura diaria · España", "AEMET · resumen nacional")
         try:
             temperatures = cached_temperature_table()
         except (BotoCoreError, ClientError, ArrowException, OSError, ValueError, KeyError) as error:
             st.error(f"No se pudieron cargar las temperaturas Gold: {error}")
             st.caption(f"Origen S3: {TEMPERATURE_S3_URI}")
             return
-        day = temperatures.loc[temperatures["fecha"] == selected_date]
-        if day.empty:
-            st.info("No hay datos de temperatura para el día seleccionado.")
+        available = temperatures.loc[temperatures["fecha"] <= selected_date]
+        if available.empty:
+            st.caption("No hay datos de temperatura disponibles para la fecha elegida ni para días anteriores.")
             return
-        row = day.iloc[0]
+        temperature_date = available["fecha"].max()
+        row = available.loc[available["fecha"] == temperature_date].iloc[0]
+        if temperature_date != selected_date:
+            st.caption(
+                f"Las temperaturas mostradas corresponden al {format_date(temperature_date)}, "
+                "el día más reciente con datos disponibles anterior a la fecha elegida."
+            )
+        else:
+            st.caption(f"Temperaturas del {format_date(temperature_date)}.")
         for column, label in (("tmin", "Mínima nacional"), ("tmax", "Máxima nacional"), ("tmed", "Media diaria nacional")):
             value = "Sin dato" if pd.isna(row[column]) else f"{format_number(row[column], 1)} °C"
             if column == "tmed":

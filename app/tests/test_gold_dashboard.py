@@ -320,6 +320,7 @@ class GoldDashboardTests(unittest.TestCase):
         self.assertLess(markup.index("Temperatura diaria"), markup.index("Regla de decisión"))
         for text in ("-2,0 °C", "18,0 °C", "8,0 °C", "06:15", "15:45", "MADRID", "SEVILLA"):
             self.assertIn(text, markup)
+        self.assertFalse(any("el día más reciente" in item.value for item in app.caption))
         app.button(key="schedule_day_2026-01-02").click().run()
         self.assertEqual(list(app.exception), [])
         markup = "\n".join(item.value for item in app.markdown)
@@ -329,11 +330,58 @@ class GoldDashboardTests(unittest.TestCase):
         self.assertEqual(self.temperature_loader.call_count, 1)
         app.selectbox(key="schedule_month").set_value(pd.Timestamp("2026-03-01").date()).run()
         app.button(key="schedule_day_2026-03-29").click().run()
-        self.assertTrue(any("No hay datos de temperatura" in item.value for item in app.info))
+        self.assertTrue(any(
+            "2 enero 2026" in item.value and "el día más reciente" in item.value
+            for item in app.caption
+        ))
+        markup = "\n".join(item.value for item in app.markdown)
+        self.assertIn("0,0 °C", markup)
+        self.assertIn("Sin dato", markup)
+        self.assertNotIn("-2,0 °C", markup)
+        self.assertFalse(app.error)
+        self.assertFalse(app.warning)
         self.assertEqual(list(app.exception), [])
         with patch.object(data_loader, "load_gold_tables", return_value=tables):
             next(button for button in app.button if button.label == "Actualizar datos de S3").click().run()
         self.assertEqual(self.temperature_loader.call_count, 2)
+
+    def test_temperature_fallback_uses_latest_prior_date_even_if_unsorted(self) -> None:
+        future = self.temperature_source.iloc[[0]].copy()
+        future["fecha"] = pd.Timestamp("2026-04-01").date()
+        future["tmin"] = -99.0
+        self.temperature_loader.return_value = pd.concat(
+            [future, self.temperature_source.iloc[::-1]], ignore_index=True,
+        )
+        app = self.run_app(self.load_tables())
+        app.radio(key="view").set_value("Programación diaria").run()
+        app.selectbox(key="schedule_month").set_value(pd.Timestamp("2026-03-01").date()).run()
+        app.button(key="schedule_day_2026-03-29").click().run()
+        self.assertEqual(list(app.exception), [])
+        self.assertTrue(any(
+            "2 enero 2026" in item.value and "el día más reciente" in item.value
+            for item in app.caption
+        ))
+        markup = "\n".join(item.value for item in app.markdown)
+        self.assertIn("0,0 °C", markup)
+        self.assertNotIn("-99,0 °C", markup)
+        self.assertEqual(len(app.get("download_button")), 1)
+
+    def test_temperature_without_prior_data_does_not_use_future_measurements(self) -> None:
+        for table in (self.temperature_source, self.temperature_source.iloc[:0]):
+            with self.subTest(empty=table.empty):
+                st.cache_data.clear()
+                self.temperature_loader.return_value = table.copy()
+                app = self.run_app(self.load_tables())
+                app.selectbox(key="selected_year").set_value(2025).run()
+                app.radio(key="view").set_value("Programación diaria").run()
+                self.assertEqual(list(app.exception), [])
+                self.assertTrue(any(
+                    "No hay datos de temperatura disponibles" in item.value for item in app.caption
+                ))
+                self.assertNotIn("°C", "\n".join(item.value for item in app.markdown))
+                self.assertFalse(app.error)
+                self.assertFalse(app.warning)
+                self.assertEqual(len(app.get("download_button")), 1)
 
     def test_temperature_s3_error_does_not_block_energy_results(self) -> None:
         self.temperature_loader.side_effect = ClientError({"Error": {"Code": "AccessDenied"}}, "GetObject")
