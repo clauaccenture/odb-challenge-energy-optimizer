@@ -128,8 +128,16 @@ def apply_styles() -> None:
         .recommendation { margin-top: 15px; padding: 11px; border-left: 3px solid #1f6e61; background: #e4f2eb; font-size: 11px; }
         .recommendation p { margin: 3px 0 0; color: #405a56; font-size: 10px; }
         .date-preview { margin-top: 8px; color: #1f6e61; font-size: 12px; }
-        [data-testid="stBaseButton-primary"], button[kind="primary"] { background: #1f6e61; border-color: #1f6e61; color: white; border-radius: 5px; }
-        [data-testid="stBaseButton-primary"]:hover, button[kind="primary"]:hover { background: #18574d; border-color: #18574d; color: white; }
+        .stApp [data-testid="stButton"] button,
+        .stApp [data-testid="stDownloadButton"] button { background: #ffffff; border: 1px solid #52756b; color: #183432; border-radius: 5px; }
+        .stApp [data-testid="stButton"] button:hover,
+        .stApp [data-testid="stDownloadButton"] button:hover { background: #e4f2eb; border-color: #1f6e61; color: #183432; }
+        .stApp [data-testid="stButton"] button[kind="primary"] { background: #1f6e61; border-color: #1f6e61; color: #ffffff; }
+        .stApp [data-testid="stButton"] button[kind="primary"]:hover { background: #18574d; border-color: #18574d; color: #ffffff; }
+        .stApp [data-testid="stButton"] button [data-testid="stMarkdownContainer"] p,
+        .stApp [data-testid="stDownloadButton"] button [data-testid="stMarkdownContainer"] p { color: inherit; }
+        .stApp [data-testid="stButton"] button:focus-visible,
+        .stApp [data-testid="stDownloadButton"] button:focus-visible { outline: 3px solid #1f6e61; outline-offset: 3px; }
         [data-baseweb="input"] > div, [data-baseweb="select"] > div { background: white; color: #183432; border-color: #dce4df; border-radius: 5px; }
         label [data-testid="stMarkdownContainer"] p { color: #405a56; font-size: 11px; }
         .stApp [data-testid="stSidebar"] [role="radiogroup"] label p { color: #c7d7d0; font-size: 13px; }
@@ -268,7 +276,7 @@ def render_summary(monthly: pd.DataFrame, daily: pd.DataFrame, saving: float) ->
             xaxis=dict(fixedrange=True, showgrid=False),
             yaxis=dict(visible=False, fixedrange=True, rangemode="tozero"),
         )
-        st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
+        st.plotly_chart(figure, config={"displayModeBar": False})
         selected = st.selectbox("Mes seleccionado", options, key="summary_month", format_func=month_label, label_visibility="collapsed")
         selected_month = monthly.loc[monthly["month"] == selected].iloc[0]
         markup(f'<div class="selected-month"><span>{month_label(selected)} · {int(selected_month["days"])} días</span><strong>{format_eur(selected_month["saving_eur"])}</strong></div>')
@@ -439,7 +447,7 @@ def render_analysis(monthly: pd.DataFrame, period_saving: float) -> None:
             xaxis=dict(tickmode="array", tickvals=list(range(1, len(filtered) + 1)), ticktext=names, showgrid=False, zeroline=False, fixedrange=True),
             yaxis=dict(title="EUR", rangemode="tozero", gridcolor="#dce4df", zeroline=False, fixedrange=True),
         )
-        st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
+        st.plotly_chart(figure, config={"displayModeBar": False})
     with contribution_column:
         markup('<div class="analysis-heading"><h2 class="widget-heading">Aportación mensual</h2>'
                '<p class="panel-subtitle">Ahorro S0 − S1 · EUR</p></div>')
