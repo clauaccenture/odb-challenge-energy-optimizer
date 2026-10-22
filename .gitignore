@@ -221,6 +221,3 @@ __marimo__/
 
 data/
 *.pem
-
-# Guia interna de pruebas de Streamlit (se comparte por separado)
-/app/instrucciones uso prueba streamlit.md
