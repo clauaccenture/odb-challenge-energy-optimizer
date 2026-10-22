@@ -56,6 +56,9 @@ class DailyIngestionTests(unittest.TestCase):
         self.assertEqual(upload.call_args_list, [call(historical), call(saved)])
         self.assertIn("Última fecha disponible: 2026-10-20", self.output.getvalue())
         self.assertFalse((self.root / "aemet_2026-10-23_2026-10-23.json").exists())
+        scope = json.loads((self.root / "last_ingestion.json").read_text(encoding="utf-8"))
+        self.assertEqual(scope["status"], "completed")
+        self.assertEqual(scope["files"], [saved.name])
 
     def test_no_updates_is_explicit_and_keeps_history(self):
         self.history(["2026-10-19"])
@@ -65,6 +68,9 @@ class DailyIngestionTests(unittest.TestCase):
         self.assertIn("AEMET SIN NOVEDADES", self.output.getvalue())
         upload.assert_not_called()
         self.assertFalse((self.root / "manifest.jsonl").exists())
+        scope = json.loads((self.root / "last_ingestion.json").read_text(encoding="utf-8"))
+        self.assertEqual(scope["files"], [])
+        self.assertEqual(scope["status"], "completed")
 
     def test_repeated_target_does_not_download_or_duplicate_manifest(self):
         self.history(["2026-10-19"])
@@ -83,6 +89,8 @@ class DailyIngestionTests(unittest.TestCase):
             with self.assertRaises(requests.Timeout):
                 aemet.ingest_daily(date(2026, 10, 22), True)
         self.assertNotIn("SIN NOVEDADES", self.output.getvalue())
+        scope = json.loads((self.root / "last_ingestion.json").read_text(encoding="utf-8"))
+        self.assertEqual(scope["status"], "running")
 
     def test_s3_failure_can_be_recovered_on_next_run(self):
         self.history(["2026-10-19"])
@@ -154,6 +162,11 @@ class DailyIngestionTests(unittest.TestCase):
         self.assertEqual(download.call_args_list, [
             call(date(2026, 10, 1), date(2026, 10, 15)),
             call(date(2026, 10, 16), date(2026, 10, 21)),
+        ])
+        scope = json.loads((self.root / "last_ingestion.json").read_text(encoding="utf-8"))
+        self.assertEqual(scope["files"], [
+            "aemet_2026-10-01_2026-10-15.json",
+            "aemet_2026-10-16_2026-10-21.json",
         ])
 
 

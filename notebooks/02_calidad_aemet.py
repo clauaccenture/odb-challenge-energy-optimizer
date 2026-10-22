@@ -77,11 +77,14 @@ def normalizar_hora(s: pd.Series) -> pd.Series:
     return texto.where(valida).astype(object)
 
 
-def load_aemet(raw_dir: Path) -> pd.DataFrame:
+def load_aemet(raw_dir: Path, filenames: list[str] | None = None) -> pd.DataFrame:
     """Aplana todos los JSON raw en una tabla con las columnas RAW_COLS."""
     frames = []
-    files = sorted(raw_dir.glob("aemet_*.json"))
+    files = (sorted(raw_dir.glob("aemet_*.json")) if filenames is None
+             else [raw_dir / name for name in filenames])
     if not files:
+        if filenames is not None:
+            return pd.DataFrame(columns=RAW_COLS)
         raise FileNotFoundError(f"No hay JSON en {raw_dir}. Ejecuta antes 01_ingesta_aemet.py")
     for path in files:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -158,17 +161,35 @@ def clean(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     report["stations"] = int(out["indicativo"].nunique())
     report["provinces"] = int(out["provincia"].nunique())
     report["days"] = int(out["fecha"].nunique())
-    report["date_min"] = str(out["fecha"].min())
-    report["date_max"] = str(out["fecha"].max())
+    report["date_min"] = str(out["fecha"].min()) if len(out) else None
+    report["date_max"] = str(out["fecha"].max()) if len(out) else None
     report["stations_per_province_day"] = {
-        "min": int(per_prov_day.min()),
-        "mean": round(float(per_prov_day.mean()), 2),
-        "max": int(per_prov_day.max()),
+        "min": int(per_prov_day.min()) if len(per_prov_day) else None,
+        "mean": round(float(per_prov_day.mean()), 2) if len(per_prov_day) else None,
+        "max": int(per_prov_day.max()) if len(per_prov_day) else None,
     }
     report["null_values_per_column"] = {
         c: int(out[c].isna().sum()) for c in ["localidad", "tmax", "tmin", "tmed", "hora_tmax", "hora_tmin"]
     }
     return out, report
+
+
+def latest_ingestion_files(raw_dir: Path) -> list[str] | None:
+    path = raw_dir / "last_ingestion.json"
+    if not path.exists():
+        print("Sin registro de última ingesta: informe de calidad del histórico completo.")
+        return None
+    scope = json.loads(path.read_text(encoding="utf-8"))
+    if scope.get("status") != "completed":
+        raise ValueError("La última ingesta AEMET no ha finalizado correctamente.")
+    files = scope.get("files")
+    if not isinstance(files, list) or any(
+        not isinstance(name, str) or Path(name).name != name
+        or not name.startswith("aemet_") or not name.endswith(".json")
+        for name in files
+    ):
+        raise ValueError("Lista de archivos de última ingesta AEMET no válida.")
+    return files
 
 
 def to_records(df: pd.DataFrame) -> list[dict]:
@@ -194,8 +215,20 @@ def main() -> None:
     args = ap.parse_args()
 
     print("Leyendo JSON raw...")
+    filenames = latest_ingestion_files(RAW_DIR)
     raw = load_aemet(RAW_DIR)
-    df, report = clean(raw)
+    df, historical_report = clean(raw)
+    if df.empty:
+        raise ValueError("No hay temperaturas válidas para generar Silver AEMET.")
+    ingested = raw if filenames is None else load_aemet(RAW_DIR, filenames)
+    if filenames is None:
+        report = historical_report
+    else:
+        _, report = clean(ingested)
+    dates = sorted(pd.to_datetime(ingested["fecha"], errors="raise").dropna().dt.strftime("%Y-%m-%d").unique())
+    report["scope"] = "historical" if filenames is None else "last_ingestion"
+    report["ingested_files"] = filenames
+    report["ingested_dates"] = dates
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     data_path = OUT_DIR / "aemet_diario.json"
@@ -203,8 +236,10 @@ def main() -> None:
     data_path.write_text(json.dumps(to_records(df), ensure_ascii=False), encoding="utf-8")
     rep_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
 
+    if filenames == []:
+        print("CALIDAD AEMET SIN NOVEDADES: no se han ingestado registros nuevos.")
     print(json.dumps(report, indent=2, ensure_ascii=False))
-    print(f"Guardado {data_path}")
+    print(f"Silver histórico completo: {len(df)} registros. Guardado {data_path}")
     if BUCKET and not args.no_s3:
         upload_s3(data_path)
         upload_s3(rep_path)

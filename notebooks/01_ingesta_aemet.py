@@ -330,7 +330,20 @@ def upload_s3(
 # MAIN
 # --------------------------------------------------
 
+def save_ingestion_scope(status: str, files: list[str]) -> None:
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    path = RAW_DIR / "last_ingestion.json"
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps({
+        "status": status,
+        "files": files,
+        "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+    }, indent=2), encoding="utf-8")
+    temporary.replace(path)
+
+
 def ingest_daily(target: date, no_s3: bool) -> None:
+    save_ingestion_scope("running", [])
     latest = None
     latest_path = None
     for path in sorted(RAW_DIR.glob("aemet_*.json")):
@@ -372,6 +385,9 @@ def ingest_daily(target: date, no_s3: bool) -> None:
         if not no_s3:
             upload_s3(path)
 
+    save_ingestion_scope("completed", [
+        f"aemet_{day}_{day}.json" for day, _ in reversed(pending)
+    ])
     if pending:
         print(f"AEMET: {len(pending)} días nuevos guardados. "
               f"Última fecha disponible: {pending[0][0]}")
@@ -440,6 +456,8 @@ def main():
 
     total_bloques = 0
     total_registros = 0
+    ingested_files = []
+    save_ingestion_scope("running", [])
 
     # Dividir automáticamente
     # el periodo en bloques de 15 días
@@ -494,7 +512,9 @@ def main():
 
         total_bloques += 1
         total_registros += len(datos)
+        ingested_files.append(archivo.name)
 
+    save_ingestion_scope("completed", ingested_files)
     # Resumen
     print("\n" + "=" * 60)
     print("INGESTA AEMET FINALIZADA")
