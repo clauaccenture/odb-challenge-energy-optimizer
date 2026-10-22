@@ -332,8 +332,6 @@ def render_daily_temperature(selected_date: date) -> None:
                 detail = " · ".join([time_label, *location])
             markup(f'<div class="daily-result"><span>{label}</span><strong>{value}</strong>'
                    f'<small>{escape(detail)}</small></div>')
-        st.caption("Horas tal como las publica AEMET, sin conversión de zona horaria. "
-                   "Gold prioriza extremos con hora disponible.")
 
 
 def render_daily_schedule(schedule: pd.DataFrame, totals: pd.Series) -> None:
