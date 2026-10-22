@@ -87,3 +87,19 @@ Además del resultado anual, se analizará la **evolución mensual del ahorro**,
 El dashboard consume exclusivamente `gold_plan_mensual.parquet` y `gold_programacion_horaria.parquet` desde `s3://energy-optimizer-grupo4/outputs/redata/`, en `eu-north-1`, utilizando las credenciales AWS disponibles en la EC2. Lee los indicadores mensuales y la programación optimizada de Gold, agrega sus totales diarios sin reoptimizar y permite descargar el plan horario. No utiliza los antiguos archivos de plan y resumen diario que puedan permanecer en S3.
 
 La configuración, los permisos IAM necesarios y las instrucciones de ejecución se describen en [app/README.md](app/README.md). El acceso a la instancia mediante Session Manager no sustituye los permisos de lectura sobre S3.
+
+## 7. Actualización diaria AEMET
+
+El pipeline utiliza Python 3.11 en un entorno independiente de Streamlit (`.venv-pipeline` en EC2). Desde la raíz del repositorio:
+
+```bash
+.venv-pipeline/bin/python notebooks/01_ingesta_aemet.py --daily --end 2026-10-22
+```
+
+El modo `--daily` busca desde la fecha objetivo hacia atrás hasta la última fecha real presente en los JSON raw locales, no hasta la fecha indicada en sus nombres. Requiere un histórico local previo; no lo descarga automáticamente de S3. Conserva las fechas originales y guarda cada día nuevo en un archivo independiente, sin inventar temperaturas para días aún no publicados. Una fecha disponible no garantiza cobertura de todas las estaciones o provincias.
+
+La ausencia confirmada de datos (HTTP 404, estado AEMET 404 o lista de registros vacía) se registra sin hacer fallar la actualización diaria. Si no hay novedades, se conserva el histórico. Errores de autenticación, límites de peticiones, red, S3 o respuestas inválidas sí detienen la ejecución. Las peticiones se completan antes de guardar los días nuevos, que se publican de antiguo a reciente; al relanzar, se reintenta la subida del archivo que contiene la última fecha local.
+
+Este comando solo actualiza raw. Después se ejecutan `02_calidad_aemet.py` y `03_gold_aemet.py` para generar y publicar Silver y Gold; no arranca Streamlit. El modo histórico `--start ... --end ...` mantiene las peticiones por bloques de hasta 15 días y sigue notificando como error la ausencia de datos.
+
+La programación prevista es a las 14:00 en `Europe/Madrid`, junto con REData. La fecha objetivo debe calcularse en esa zona; no se presupone una hora de publicación ni un desfase fijo de AEMET. La configuración de Scheduler y Step Functions se realiza por separado en AWS.
