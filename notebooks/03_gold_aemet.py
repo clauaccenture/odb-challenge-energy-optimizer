@@ -47,7 +47,7 @@ load_dotenv()
 
 BUCKET = os.getenv("S3_BUCKET")
 SILVER = Path("data/processed/aemet/aemet_diario.json")
-OUT_DIR = Path("data/outputs")
+OUT_DIR = Path("data/outputs/aemet")
 OUT_NAME = "gold_temperatura_diaria.parquet"
 DECIMALS = 1  # decimales con los que se enseña la temperatura
 
@@ -133,7 +133,7 @@ def build_gold(silver: pd.DataFrame) -> tuple[pd.DataFrame, dict, dict]:
 def upload_s3(path: Path) -> None:
     import boto3  # acceso por rol IAM de la EC2, sin claves en el codigo
 
-    key = f"outputs/{path.name}"
+    key = f"outputs/aemet/{path.name}"
     boto3.client("s3").upload_file(str(path), BUCKET, key)
     print(f"  subido a s3://{BUCKET}/{key}")
 
