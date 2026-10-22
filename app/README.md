@@ -3,11 +3,17 @@
 La app lee exclusivamente las tablas Gold Parquet generadas por [03_gold_redata.py](../notebooks/03_gold_redata.py), desde estos objetos de S3:
 
 ```text
-s3://energy-optimizer-grupo4/outputs/gold_plan_horario.parquet
-s3://energy-optimizer-grupo4/outputs/gold_resumen_diario.parquet
+s3://energy-optimizer-grupo4/outputs/redata/gold_plan_mensual.parquet
+s3://energy-optimizer-grupo4/outputs/redata/gold_programacion_horaria.parquet
 ```
 
-La región es `eu-north-1`. El bucket, prefijo y región están definidos en [data_loader.py](data_loader.py). No se utilizan CSV locales ni hay una alternativa local si falla S3. La descarga del plan diario desde el dashboard sigue siendo un CSV.
+La región es `eu-north-1`. El bucket, prefijo y región están definidos en [data_loader.py](data_loader.py). No se utilizan CSV locales ni hay una alternativa local si falla S3.
+
+`gold_plan_mensual.parquet` contiene una fila por mes. Sus columnas son `mes`, `precio_spot_medio_mensual_eur_mwh`, `ahorro_estimado_mensual_eur`, `precio_spot_medio_anual_eur_mwh` y `ahorro_estimado_anual_eur`.
+
+`gold_programacion_horaria.parquet` contiene `fecha_local`, `hora_local`, `precio_eur_mwh`, `consumo_baseline_mwh`, `consumo_optimizado_mwh`, `coste_baseline_eur` y `coste_optimizado_eur`. Gold garantiza el orden cronológico de sus filas.
+
+Los antiguos `gold_plan_horario.parquet` y `gold_resumen_diario.parquet` no se leen, aunque sigan en S3: el proceso actual ya no los actualiza. Los totales diarios se obtienen sumando la programación publicada durante la carga cacheada, sin recalcular la optimización.
 
 ## Acceso desde EC2
 
@@ -23,8 +29,8 @@ La conexión usa `boto3` y su cadena estándar de credenciales AWS. En EC2 se re
       "Effect": "Allow",
       "Action": "s3:GetObject",
       "Resource": [
-        "arn:aws:s3:::energy-optimizer-grupo4/outputs/gold_plan_horario.parquet",
-        "arn:aws:s3:::energy-optimizer-grupo4/outputs/gold_resumen_diario.parquet"
+        "arn:aws:s3:::energy-optimizer-grupo4/outputs/redata/gold_plan_mensual.parquet",
+        "arn:aws:s3:::energy-optimizer-grupo4/outputs/redata/gold_programacion_horaria.parquet"
       ]
     }
   ]
@@ -48,18 +54,26 @@ No se descargan fuentes de REData, no se recalcula la optimización y no se escr
 ## Pantallas y validaciones
 
 1. **Resumen ejecutivo**: costes S0/S1, ahorro total y porcentaje ponderado, ahorro mensual, cobertura y selección de fecha.
-2. **Programación diaria**: intervalos locales, precios, consumos y costes S0/S1, parámetros del escenario y descarga del plan seleccionado.
+2. **Programación diaria**: intervalos locales, precios, consumos, costes S0/S1 y horas seleccionadas por Gold, junto con sus totales diarios y descarga CSV. La asignación se muestra tal como viene en el Parquet.
 3. **Evolución del ahorro**: acumulado, aportación mensual y filtro trimestral. Un trimestre sin registros muestra ausencia de resultados, no ahorro cero.
 
 La fecha de programación se selecciona mediante el mismo calendario mensual en el resumen ejecutivo y en la programación diaria. Al pulsar la fecha se abre el calendario; el selector de mes permite recorrer el año elegido en la barra lateral.
 
-Solo están habilitados los días presentes en el resumen con `estado_optimizacion=optimo`. Se deshabilitan tanto los días anteriores o posteriores a la cobertura como los huecos intermedios sin programación válida. Por ejemplo, con datos hasta el 30 de septiembre de 2026, el 1 de octubre y el 24 de diciembre de 2026 aparecen deshabilitados. El límite se obtiene de Gold, no de la fecha actual del sistema. Al cambiar de año se conserva la fecha si sigue disponible; en caso contrario, se selecciona el primer día válido.
+Solo están habilitados los días con programación horaria completa y validada. Se deshabilitan tanto los días anteriores o posteriores a la cobertura como los huecos intermedios sin programación publicada. Por ejemplo, con datos hasta el 30 de septiembre de 2026, el 1 de octubre y el 24 de diciembre de 2026 aparecen deshabilitados. El límite se obtiene de Gold, no de la fecha actual del sistema. Al cambiar de año se conserva la fecha si sigue disponible; en caso contrario, se selecciona el primer día válido. El nuevo Gold no publica los días rechazados ni el motivo de exclusión; la app no los inventa.
 
-Se conservan las validaciones de columnas obligatorias, fechas, estados, valores numéricos finitos, horas completas del día local, energía objetivo, límite horario, costes precio por consumo y coherencia entre plan y resumen.
+Se validan columnas obligatorias, meses únicos, fechas, valores numéricos finitos, horas completas y ordenadas, energía diaria de 30 MWh, límite de 7 MWh/h y costes como precio por consumo. Se contrastan ahorros y precios medios mensuales con el horario, y los indicadores anuales con el período completo.
 
-Las horas se obtienen de `datetime_local`, con conversión a `Europe/Madrid`. Se conservan los días de 23, 24 y 25 horas. `fecha_local` procede de la fecha local generada en Gold; no se requiere `datetime_utc`.
+El archivo no incluye timestamps ni desfases UTC. Para mostrar intervalos inequívocos, se genera el calendario horario de cada fecha en `Europe/Madrid` y se comprueba que su secuencia coincide exactamente con `hora_local`. Las filas se asignan en el orden cronológico garantizado por Gold: en otoño las dos horas 02:00 corresponden primero a CEST y luego a CET. No se ordena por `hora_local`, porque eso podría intercambiar las horas repetidas. El CSV incluye `datetime_local` con su desfase, además de las columnas originales. Si Gold deja de garantizar ese orden, deberá publicar un timestamp con zona horaria.
 
-Solo se agregan días con `estado_optimizacion=optimo`. Los meses sin registros no se inventan y los períodos parciales no se anualizan. El porcentaje agregado es ahorro total / coste S0 total; con coste S0 cero se muestra "No aplica".
+El ahorro mensual se lee directamente de Gold; no se reconstruye para los gráficos. Los totales diarios, el porcentaje diario y el número de días por mes se agregan desde las horas una sola vez durante la carga cacheada, ya que Gold no los publica en los nuevos archivos.
+
+Los campos llamados anuales representan todo el período cargado, se repiten en cada mes y no están agrupados por año. Con datos de un solo año se utiliza el ahorro anual una sola vez; con varios años se suman los ahorros mensuales del año seleccionado para no mostrar el total global como si fuera anual. Los filtros trimestrales, acumulados y medias mensuales siguen siendo operaciones de presentación.
+
+Los costes S0/S1 del período y el porcentaje ponderado siguen calculándose desde los totales disponibles: Gold no publica esos indicadores agregados. Solo se consideran días con programación completa validada. Los meses sin registros no se inventan y los períodos parciales no se anualizan. El porcentaje agregado es ahorro total / coste S0 total; con coste S0 cero se muestra "No aplica".
+
+### Parámetros del escenario
+
+Los nuevos archivos no publican los parámetros ni la política de negativos. La app identifica los valores mostrados como parámetros del caso 4: 30 MWh diarios, límite de 7 MWh/h, desempate 08:00-17:00 y política de negativos aplicada en Silver. Los objetivos de energía y límite se declaran en el loader y se validan contra el horario. Si cambia el escenario de Gold, deberá actualizarse este contrato o publicarse su metadata.
 
 Los precios proceden de REData; los consumos representan el escenario industrial del caso 4, no mediciones de una planta. Los costes incluyen energía a precio de mercado, sin peajes, cargos ni impuestos.
 
@@ -80,8 +94,19 @@ No expongas el puerto 8501 a todo Internet. Restringe el acceso al origen autori
 
 - **NoCredentialsError**: revisar que la instancia tenga un rol IAM utilizable o credenciales válidas en el entorno. Tener acceso por SSM no garantiza esto.
 - **AccessDenied**: revisar `s3:GetObject`, políticas del bucket y del endpoint y, si aplica, permisos de KMS.
-- **NoSuchKey o 404**: comprobar los dos nombres y el prefijo `outputs/`.
+- **NoSuchKey o 404**: comprobar los dos nombres y el prefijo `outputs/redata/`.
 - **Error de conexión o timeout**: revisar la conectividad de la EC2 con S3 en `eu-north-1`.
 - **Faltan columnas o las tablas no coinciden**: utilizar los dos Parquet generados por la misma ejecución del script Gold.
 - **Resultados anteriores tras una subida**: pulsar **Actualizar datos de S3** cuando ambos objetos estén subidos.
 - **No hay resultados para un trimestre**: los archivos no contienen días válidos de ese trimestre; no significa ahorro cero.
+- **Error de horas incompletas o fuera de orden**: revisar que Gold publique el día completo en orden cronológico, conservando las dos horas repetidas de otoño.
+
+## Pruebas
+
+Desde la raíz del repositorio, con el entorno virtual activado:
+
+```text
+python -m unittest discover -s app\tests -v
+```
+
+Las pruebas generan tablas con las funciones reales de Gold, las serializan en Parquet en memoria y simulan S3. También ejecutan las tres pantallas mediante `streamlit.testing.v1.AppTest`, sin conectarse a AWS ni modificar Gold.

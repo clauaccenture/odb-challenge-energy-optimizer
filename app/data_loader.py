@@ -11,22 +11,23 @@ import pandas as pd
 
 
 S3_BUCKET = "energy-optimizer-grupo4"
-S3_PREFIX = "outputs"
+S3_PREFIX = "outputs/redata"
 S3_REGION = "eu-north-1"
 GOLD_S3_URI = f"s3://{S3_BUCKET}/{S3_PREFIX}/"
-PLAN_FILENAME = "gold_plan_horario.parquet"
-SUMMARY_FILENAME = "gold_resumen_diario.parquet"
+MONTHLY_FILENAME = "gold_plan_mensual.parquet"
+HOURLY_FILENAME = "gold_programacion_horaria.parquet"
 TIMEZONE = "Europe/Madrid"
-PLAN_NUMERIC = [
+# Contract of the case 4 scenario, not metadata supplied by the Parquet files.
+ENERGY_TARGET_MWH = 30.0
+HOURLY_LIMIT_MWH = 7.0
+MONTHLY_NUMERIC = [
+	"precio_spot_medio_mensual_eur_mwh", "ahorro_estimado_mensual_eur",
+	"precio_spot_medio_anual_eur_mwh", "ahorro_estimado_anual_eur",
+]
+HOURLY_NUMERIC = [
 	"precio_eur_mwh", "consumo_baseline_mwh", "consumo_optimizado_mwh",
 	"coste_baseline_eur", "coste_optimizado_eur",
 ]
-SUMMARY_TOTALS = {
-	"consumo_baseline_total_mwh": "consumo_baseline_mwh",
-	"consumo_optimizado_total_mwh": "consumo_optimizado_mwh",
-	"coste_baseline_total_eur": "coste_baseline_eur",
-	"coste_optimizado_total_eur": "coste_optimizado_eur",
-}
 
 
 def read_table(filename: str, required: list[str]) -> pd.DataFrame:
@@ -49,70 +50,75 @@ def numeric_columns(table: pd.DataFrame, columns: list[str], name: str) -> None:
 			raise ValueError(f"{name}: {column} contiene valores vacíos o no finitos.")
 
 
-def load_gold_tables() -> tuple[pd.DataFrame, pd.DataFrame]:
-	"""Load matching hourly and daily results; timestamps come from local time."""
-	plan = read_table(PLAN_FILENAME, ["datetime_local", "fecha_local", *PLAN_NUMERIC])
-	summary = read_table(SUMMARY_FILENAME, [
-		"fecha_local", "horas_del_dia", "energia_flexible_objetivo_mwh",
-		"limite_flexible_mwh_por_hora", "politica_negativos", "estado_optimizacion",
-		*SUMMARY_TOTALS, "ahorro_eur", "ahorro_pct",
-	])
-	if summary.empty:
-		raise ValueError("El resumen diario no contiene fechas.")
-	for table in (plan, summary):
-		table["fecha_local"] = pd.to_datetime(table["fecha_local"], format="%Y-%m-%d", errors="raise").dt.date
-		if table["fecha_local"].isna().any():
-			raise ValueError("Hay fechas locales vacías.")
-	if summary["fecha_local"].duplicated().any():
-		raise ValueError("El resumen contiene fechas duplicadas.")
-	if not summary["estado_optimizacion"].isin(["optimo", "dia_incompleto", "infactible"]).all():
-		raise ValueError("El resumen contiene estados de optimización desconocidos.")
-	numeric_columns(plan, PLAN_NUMERIC, PLAN_FILENAME)
-	numeric_columns(summary, ["horas_del_dia", "energia_flexible_objetivo_mwh", "limite_flexible_mwh_por_hora"], SUMMARY_FILENAME)
-	if not summary["horas_del_dia"].ge(0).all() or not (summary["horas_del_dia"] % 1 == 0).all():
-		raise ValueError("El número de horas debe ser un entero no negativo.")
-	if not summary[["energia_flexible_objetivo_mwh", "limite_flexible_mwh_por_hora"]].gt(0).all().all():
-		raise ValueError("La energía objetivo y el límite horario deben ser positivos.")
-	plan["datetime_local"] = pd.to_datetime(plan["datetime_local"], utc=True, errors="raise").dt.tz_convert(TIMEZONE)
-	if plan["datetime_local"].isna().any() or plan["datetime_local"].duplicated().any():
-		raise ValueError("El plan contiene horas vacías o duplicadas.")
-	if not (plan["datetime_local"].dt.date == plan["fecha_local"]).all():
-		raise ValueError("La fecha del plan no coincide con datetime_local en Europe/Madrid.")
-	valid = summary[summary["estado_optimizacion"] == "optimo"].copy()
-	numeric_columns(valid, [*SUMMARY_TOTALS, "ahorro_eur"], SUMMARY_FILENAME)
-	if not plan["fecha_local"].isin(valid["fecha_local"]).all():
-		raise ValueError("El plan incluye fechas sin un resumen óptimo correspondiente.")
-	for daily in valid.itertuples(index=False):
-		schedule = plan[plan["fecha_local"] == daily.fecha_local].sort_values("datetime_local")
-		start = pd.Timestamp(daily.fecha_local, tz=TIMEZONE)
-		end = pd.Timestamp(daily.fecha_local + pd.Timedelta(days=1), tz=TIMEZONE)
+def load_gold_tables() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+	"""Read the current monthly/hourly contract and aggregate already optimized hours."""
+	monthly = read_table(MONTHLY_FILENAME, ["mes", *MONTHLY_NUMERIC])
+	plan = read_table(HOURLY_FILENAME, ["fecha_local", "hora_local", *HOURLY_NUMERIC])
+	if plan.empty or monthly.empty:
+		raise ValueError("Las tablas Gold mensual y horaria deben contener resultados.")
+	plan["fecha_local"] = pd.to_datetime(plan["fecha_local"], format="%Y-%m-%d", errors="raise").dt.date
+	if plan["fecha_local"].isna().any():
+		raise ValueError("Hay fechas locales vacías.")
+	if not monthly["mes"].astype("string").str.fullmatch(r"\d{4}-(0[1-9]|1[0-2])").fillna(False).all():
+		raise ValueError("La tabla mensual debe contener meses con formato YYYY-MM.")
+	if monthly["mes"].duplicated().any():
+		raise ValueError("La tabla mensual contiene meses duplicados.")
+	numeric_columns(monthly, MONTHLY_NUMERIC, MONTHLY_FILENAME)
+	numeric_columns(plan, ["hora_local", *HOURLY_NUMERIC], HOURLY_FILENAME)
+	if not plan["hora_local"].between(0, 23).all() or not (plan["hora_local"] % 1 == 0).all():
+		raise ValueError("hora_local debe ser un entero entre 0 y 23.")
+	schedules = []
+	for day, schedule in plan.groupby("fecha_local", sort=True):
+		start = pd.Timestamp(day, tz=TIMEZONE)
+		end = pd.Timestamp(day + pd.Timedelta(days=1), tz=TIMEZONE)
 		expected = pd.date_range(start, end, freq="h", inclusive="left")
-		if daily.horas_del_dia != len(expected) or schedule["datetime_local"].tolist() != expected.tolist():
-			raise ValueError(f"{daily.fecha_local}: faltan horas o no coinciden con el día local completo.")
-		for total_column, hourly_column in SUMMARY_TOTALS.items():
-			if not np.isclose(schedule[hourly_column].sum(), getattr(daily, total_column), atol=1e-4, rtol=0):
-				raise ValueError(f"{daily.fecha_local}: {total_column} no coincide entre las dos tablas.")
+		# Gold guarantees chronological row order, including the two autumn 02:00s.
+		if schedule["hora_local"].tolist() != expected.hour.tolist():
+			raise ValueError(f"{day}: horas incompletas, duplicadas o fuera del orden cronológico de Gold.")
+		schedule = schedule.copy()
+		schedule["datetime_local"] = expected
 		for scenario in ("baseline", "optimizado"):
 			consumption = schedule[f"consumo_{scenario}_mwh"]
-			if not consumption.between(0, daily.limite_flexible_mwh_por_hora).all():
-				raise ValueError(f"{daily.fecha_local}: consumo {scenario} fuera del límite horario.")
-			if not np.isclose(consumption.sum(), daily.energia_flexible_objetivo_mwh, atol=1e-5, rtol=0):
-				raise ValueError(f"{daily.fecha_local}: energía diaria {scenario} distinta del objetivo.")
+			if not consumption.between(0, HOURLY_LIMIT_MWH).all():
+				raise ValueError(f"{day}: consumo {scenario} fuera del límite horario del caso 4.")
+			if not np.isclose(consumption.sum(), ENERGY_TARGET_MWH, atol=1e-5, rtol=0):
+				raise ValueError(f"{day}: energía diaria {scenario} distinta del objetivo del caso 4.")
 			if not np.allclose(schedule["precio_eur_mwh"] * consumption, schedule[f"coste_{scenario}_eur"], atol=1e-4, rtol=0):
-				raise ValueError(f"{daily.fecha_local}: coste {scenario} distinto de precio por consumo.")
-		saving = daily.coste_baseline_total_eur - daily.coste_optimizado_total_eur
-		if not np.isclose(saving, daily.ahorro_eur, atol=1e-4, rtol=0):
-			raise ValueError(f"{daily.fecha_local}: ahorro distinto de coste S0 menos coste S1.")
+				raise ValueError(f"{day}: coste {scenario} distinto de precio por consumo.")
+		schedules.append(schedule)
+	plan = pd.concat(schedules, ignore_index=True)
+	summary = plan.groupby("fecha_local", as_index=False, sort=True).agg(
+		horas_del_dia=("hora_local", "size"),
+		consumo_baseline_total_mwh=("consumo_baseline_mwh", "sum"),
+		consumo_optimizado_total_mwh=("consumo_optimizado_mwh", "sum"),
+		coste_baseline_total_eur=("coste_baseline_eur", "sum"),
+		coste_optimizado_total_eur=("coste_optimizado_eur", "sum"),
+	)
+	summary["ahorro_eur"] = (summary["coste_baseline_total_eur"] - summary["coste_optimizado_total_eur"]).round(5)
 	summary["ahorro_pct"] = summary["ahorro_eur"] / summary["coste_baseline_total_eur"].replace(0, float("nan")) * 100
-	return plan.sort_values("datetime_local").reset_index(drop=True), summary.sort_values("fecha_local").reset_index(drop=True)
-
-
-def monthly_results(summary: pd.DataFrame) -> pd.DataFrame:
-	valid = summary[summary["estado_optimizacion"] == "optimo"].copy()
-	valid["month"] = pd.to_datetime(valid["fecha_local"]).dt.to_period("M").astype(str)
-	return valid.groupby("month", as_index=False, sort=True).agg(
-		cost_s0_eur=("coste_baseline_total_eur", "sum"),
-		cost_s1_eur=("coste_optimizado_total_eur", "sum"),
+	summary["energia_flexible_objetivo_mwh"] = ENERGY_TARGET_MWH
+	summary["limite_flexible_mwh_por_hora"] = HOURLY_LIMIT_MWH
+	summary["estado_optimizacion"] = "optimo"
+	summary["month"] = pd.to_datetime(summary["fecha_local"]).dt.strftime("%Y-%m")
+	daily_totals = summary.groupby("month", sort=True).agg(
 		saving_eur=("ahorro_eur", "sum"),
 		days=("fecha_local", "count"),
 	)
+	monthly = monthly.rename(columns={"mes": "month", "ahorro_estimado_mensual_eur": "saving_eur"})
+	monthly = monthly.sort_values("month").reset_index(drop=True)
+	if monthly["month"].tolist() != daily_totals.index.tolist():
+		raise ValueError("Los meses de Gold no coinciden con los días óptimos del resumen.")
+	if not np.allclose(monthly["saving_eur"], daily_totals["saving_eur"], atol=1e-4, rtol=0):
+		raise ValueError("El ahorro mensual no coincide con el resumen diario.")
+	hourly_prices = plan.assign(month=plan["datetime_local"].dt.strftime("%Y-%m")).groupby("month")["precio_eur_mwh"].mean()
+	if not np.allclose(monthly["precio_spot_medio_mensual_eur_mwh"], hourly_prices, atol=5.1e-5, rtol=0):
+		raise ValueError("El precio medio mensual no coincide con la programación horaria.")
+	for column in ("precio_spot_medio_anual_eur_mwh", "ahorro_estimado_anual_eur"):
+		if monthly[column].nunique() != 1:
+			raise ValueError(f"{column} debe repetirse con el mismo valor en todos los meses.")
+	if not np.isclose(monthly["ahorro_estimado_anual_eur"].iloc[0], monthly["saving_eur"].sum(), atol=1e-4, rtol=0):
+		raise ValueError("El ahorro anual de Gold no coincide con el total del período cargado.")
+	if not np.isclose(monthly["precio_spot_medio_anual_eur_mwh"].iloc[0], plan["precio_eur_mwh"].mean(), atol=5.1e-5, rtol=0):
+		raise ValueError("El precio medio anual no coincide con la programación horaria.")
+	monthly["days"] = daily_totals["days"].to_numpy()
+	return monthly, summary.drop(columns="month"), plan

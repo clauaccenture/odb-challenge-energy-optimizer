@@ -84,6 +84,6 @@ Además del resultado anual, se analizará la **evolución mensual del ahorro**,
 
 ## 6. Dashboard Streamlit en EC2
 
-El dashboard consume exclusivamente `gold_plan_horario.parquet` y `gold_resumen_diario.parquet` desde `s3://energy-optimizer-grupo4/outputs/`, en `eu-north-1`, utilizando las credenciales AWS disponibles en la EC2.
+El dashboard consume exclusivamente `gold_plan_mensual.parquet` y `gold_programacion_horaria.parquet` desde `s3://energy-optimizer-grupo4/outputs/redata/`, en `eu-north-1`, utilizando las credenciales AWS disponibles en la EC2. Lee los indicadores mensuales y la programación optimizada de Gold, agrega sus totales diarios sin reoptimizar y permite descargar el plan horario. No utiliza los antiguos archivos de plan y resumen diario que puedan permanecer en S3.
 
 La configuración, los permisos IAM necesarios y las instrucciones de ejecución se describen en [app/README.md](app/README.md). El acceso a la instancia mediante Session Manager no sustituye los permisos de lectura sobre S3.
