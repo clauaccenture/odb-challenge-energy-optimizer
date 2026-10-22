@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from calendar import Calendar
 from datetime import date
+from html import escape
 from textwrap import dedent
 
 import pandas as pd
@@ -12,7 +13,7 @@ import streamlit as st
 from botocore.exceptions import BotoCoreError, ClientError
 from pyarrow import ArrowException
 
-from data_loader import GOLD_S3_URI, load_gold_tables
+from data_loader import GOLD_S3_URI, TEMPERATURE_S3_URI, load_gold_tables, load_temperature_table
 
 
 st.set_page_config(
@@ -296,6 +297,45 @@ def render_summary(monthly: pd.DataFrame, daily: pd.DataFrame, saving: float) ->
         st.button("Ver programación diaria →", type="primary", on_click=open_daily_schedule, width="stretch")
 
 
+@st.cache_data(ttl=300, max_entries=1, show_spinner="Cargando temperaturas Gold desde S3...")
+def cached_temperature_table() -> pd.DataFrame:
+    return load_temperature_table()
+
+
+def render_daily_temperature(selected_date: date) -> None:
+    with st.container(border=True):
+        panel_heading("Temperatura diaria · España", f"AEMET · resumen nacional · {format_date(selected_date)}")
+        try:
+            temperatures = cached_temperature_table()
+        except (BotoCoreError, ClientError, ArrowException, OSError, ValueError, KeyError) as error:
+            st.error(f"No se pudieron cargar las temperaturas Gold: {error}")
+            st.caption(f"Origen S3: {TEMPERATURE_S3_URI}")
+            return
+        day = temperatures.loc[temperatures["fecha"] == selected_date]
+        if day.empty:
+            st.info("No hay datos de temperatura para el día seleccionado.")
+            return
+        row = day.iloc[0]
+        for column, label in (("tmin", "Mínima nacional"), ("tmax", "Máxima nacional"), ("tmed", "Media diaria nacional")):
+            value = "Sin dato" if pd.isna(row[column]) else f"{format_number(row[column], 1)} °C"
+            if column == "tmed":
+                detail = "Media de las medias provinciales; cada provincia tiene el mismo peso."
+            elif pd.isna(row[column]):
+                detail = "Sin medición disponible."
+            else:
+                hour = row[f"hora_{column}"]
+                time_label = "Hora no disponible" if pd.isna(hour) else f"A las {hour}"
+                location = [
+                    str(row[key]) for key in (f"localidad_{column}", f"provincia_{column}")
+                    if pd.notna(row[key])
+                ]
+                detail = " · ".join([time_label, *location])
+            markup(f'<div class="daily-result"><span>{label}</span><strong>{value}</strong>'
+                   f'<small>{escape(detail)}</small></div>')
+        st.caption("Horas tal como las publica AEMET, sin conversión de zona horaria. "
+                   "Gold prioriza extremos con hora disponible.")
+
+
 def render_daily_schedule(schedule: pd.DataFrame, totals: pd.Series) -> None:
     markup(f'<p class="section-intro">Plan Gold · {int(totals["horas_del_dia"])} intervalos horarios reales · Europe/Madrid. Los cambios de hora se conservan.</p>')
     table_column, summary_column = st.columns([1.35, .65])
@@ -339,6 +379,7 @@ def render_daily_schedule(schedule: pd.DataFrame, totals: pd.Series) -> None:
                 <div class="daily-result"><span>Ahorro del día</span><strong class="positive">{format_eur(totals['ahorro_eur'])}</strong><small>{format_pct(totals['ahorro_pct'])} sobre el coste S0 del día.</small></div>
                 <div class="notice">Resultado del escenario de carga flexible; no es la factura final. El ahorro de este día no se extrapola al año.</div>
             """)
+        render_daily_temperature(st.session_state.selected_date)
         with st.container(border=True):
             panel_heading("Regla de decisión", "Parámetros del caso 4 · aplicados por el proceso Gold")
             markup(f'<div class="formula">energía diaria = {format_number(totals["energia_flexible_objetivo_mwh"])} MWh<br>límite = {format_number(totals["limite_flexible_mwh_por_hora"])} MWh/h<br>priorizar precios más bajos<br>empates: 08:00–17:00 y hora más temprana</div>')
@@ -439,8 +480,9 @@ def main() -> None:
         st.caption(f"Origen S3: {GOLD_S3_URI}")
         if st.button("Actualizar datos de S3"):
             cached_gold_tables.clear()
+            cached_temperature_table.clear()
             st.rerun()
-        st.caption("Caché de datos: 5 minutos. Actualiza tras completar la subida de ambos Parquet.")
+        st.caption("Caché de datos: 5 minutos. Actualiza tras completar la subida de los Parquet de REData y AEMET.")
     single_year = monthly["month"].str[:4].nunique() == 1
     monthly = monthly[monthly["month"].str[:4] == str(selected_year)].copy()
     summary = summary[summary["fecha_local"].map(lambda value: value.year == selected_year)].copy()

@@ -16,6 +16,14 @@ S3_REGION = "eu-north-1"
 GOLD_S3_URI = f"s3://{S3_BUCKET}/{S3_PREFIX}/"
 MONTHLY_FILENAME = "gold_plan_mensual.parquet"
 HOURLY_FILENAME = "gold_programacion_horaria.parquet"
+TEMPERATURE_PREFIX = "outputs/aemet"
+TEMPERATURE_FILENAME = "gold_temperatura_diaria.parquet"
+TEMPERATURE_S3_URI = f"s3://{S3_BUCKET}/{TEMPERATURE_PREFIX}/{TEMPERATURE_FILENAME}"
+TEMPERATURE_COLUMNS = [
+	"fecha", "tmed",
+	"tmin", "localidad_tmin", "provincia_tmin", "hora_tmin",
+	"tmax", "localidad_tmax", "provincia_tmax", "hora_tmax",
+]
 TIMEZONE = "Europe/Madrid"
 # Contract of the case 4 scenario, not metadata supplied by the Parquet files.
 ENERGY_TARGET_MWH = 30.0
@@ -30,10 +38,10 @@ HOURLY_NUMERIC = [
 ]
 
 
-def read_table(filename: str, required: list[str]) -> pd.DataFrame:
+def read_table(filename: str, required: list[str], *, prefix: str = S3_PREFIX) -> pd.DataFrame:
 	response = boto3.client("s3", region_name=S3_REGION).get_object(
 		Bucket=S3_BUCKET,
-		Key=f"{S3_PREFIX}/{filename}",
+		Key=f"{prefix}/{filename}",
 	)
 	with closing(response["Body"]) as body:
 		table = pd.read_parquet(BytesIO(body.read()), engine="pyarrow")
@@ -48,6 +56,23 @@ def numeric_columns(table: pd.DataFrame, columns: list[str], name: str) -> None:
 		table[column] = pd.to_numeric(table[column], errors="raise")
 		if not np.isfinite(table[column].to_numpy(dtype=float)).all():
 			raise ValueError(f"{name}: {column} contiene valores vacíos o no finitos.")
+
+
+def load_temperature_table() -> pd.DataFrame:
+	"""Read national daily temperatures, preserving missing measurements as nulls."""
+	table = read_table(TEMPERATURE_FILENAME, TEMPERATURE_COLUMNS, prefix=TEMPERATURE_PREFIX)
+	table["fecha"] = pd.to_datetime(table["fecha"], format="%Y-%m-%d", errors="raise").dt.date
+	if table["fecha"].isna().any() or table["fecha"].duplicated().any():
+		raise ValueError(f"{TEMPERATURE_FILENAME}: fechas vacías o duplicadas.")
+	for column in ("tmin", "tmax", "tmed"):
+		table[column] = pd.to_numeric(table[column], errors="raise")
+		if np.isinf(table[column].to_numpy(dtype=float, na_value=np.nan)).any():
+			raise ValueError(f"{TEMPERATURE_FILENAME}: {column} contiene valores no finitos.")
+	for column in ("hora_tmin", "hora_tmax"):
+		hours = table[column].astype("string")
+		if not hours.dropna().str.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d").all():
+			raise ValueError(f"{TEMPERATURE_FILENAME}: {column} debe tener formato HH:MM.")
+	return table.sort_values("fecha").reset_index(drop=True)
 
 
 def load_gold_tables() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:

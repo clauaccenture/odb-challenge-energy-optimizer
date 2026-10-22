@@ -41,12 +41,26 @@ class GoldDashboardTests(unittest.TestCase):
         plan, cls.summary_source = gold["build_gold"](pd.concat(days, ignore_index=True))
         cls.plan_source = plan
         cls.monthly_source = gold["build_mensual"](plan, cls.summary_source)
+        aemet = runpy.run_path(str(APP_DIR.parent / "notebooks" / "03_gold_aemet.py"))
+        cls.temperature_source, _, _ = aemet["build_gold"](pd.DataFrame([
+            {"fecha": "2026-01-01", "provincia": "MADRID", "localidad": "Madrid",
+             "tmin": -2.0, "tmax": 12.0, "tmed": 5.0, "hora_tmin": "06:15", "hora_tmax": "14:30"},
+            {"fecha": "2026-01-01", "provincia": "SEVILLA", "localidad": "Sevilla",
+             "tmin": 4.0, "tmax": 18.0, "tmed": 11.0, "hora_tmin": "05:00", "hora_tmax": "15:45"},
+            {"fecha": "2026-01-02", "provincia": "MADRID", "localidad": "Madrid",
+             "tmin": 0.0, "tmax": None, "tmed": None, "hora_tmin": None, "hora_tmax": None},
+        ]))
 
     def setUp(self) -> None:
         self.monthly = self.monthly_source.copy(deep=True)
         self.summary = self.summary_source.copy(deep=True)
         self.plan = self.plan_source.copy(deep=True)
         st.cache_data.clear()
+        temperature_patch = patch.object(
+            data_loader, "load_temperature_table", return_value=self.temperature_source.copy(deep=True),
+        )
+        self.temperature_loader = temperature_patch.start()
+        self.addCleanup(temperature_patch.stop)
 
     def load_tables(self) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         tables = {
@@ -253,6 +267,82 @@ class GoldDashboardTests(unittest.TestCase):
                 self.monthly[column] += 1
                 with self.assertRaisesRegex(ValueError, "precio medio"):
                     self.load_tables()
+
+    def read_temperature(self, table: pd.DataFrame) -> pd.DataFrame:
+        buffer = BytesIO()
+        table.to_parquet(buffer, index=False)
+        buffer.seek(0)
+        client = Mock()
+        client.get_object.return_value = {"Body": buffer}
+        with patch.object(data_loader.boto3, "client", return_value=client):
+            result = self.real_temperature_loader()
+        client.get_object.assert_called_once_with(
+            Bucket=data_loader.S3_BUCKET, Key="outputs/aemet/gold_temperatura_diaria.parquet",
+        )
+        return result
+
+    real_temperature_loader = staticmethod(data_loader.load_temperature_table)
+
+    def test_reads_national_temperature_gold_and_preserves_nulls(self) -> None:
+        table = self.read_temperature(self.temperature_source)
+        pd.testing.assert_frame_equal(table, self.temperature_source)
+        self.assertEqual(table.loc[0, "tmed"], 8.0)
+        self.assertEqual(table.loc[0, "provincia_tmin"], "MADRID")
+        self.assertEqual(table.loc[0, "provincia_tmax"], "SEVILLA")
+        self.assertTrue(pd.isna(table.loc[1, "tmax"]))
+        self.assertTrue(pd.isna(table.loc[1, "hora_tmin"]))
+
+    def test_rejects_invalid_temperature_data(self) -> None:
+        for column, value in (
+            ("fecha", None), ("fecha", "invalid"),
+            ("tmin", float("inf")), ("tmed", "invalid"),
+            ("hora_tmin", "24:00"), ("hora_tmax", "15:60"),
+        ):
+            with self.subTest(column=column, value=value):
+                table = self.temperature_source.copy()
+                table[column] = table[column].astype("string" if isinstance(value, str) else object)
+                table.loc[0, column] = value
+                with self.assertRaises(ValueError):
+                    self.read_temperature(table)
+        with self.assertRaisesRegex(ValueError, "duplicadas"):
+            self.read_temperature(pd.concat([self.temperature_source] * 2, ignore_index=True))
+        with self.assertRaisesRegex(ValueError, "faltan columnas"):
+            self.read_temperature(self.temperature_source.drop(columns="tmed"))
+
+    def test_temperature_panel_matches_date_and_handles_missing_measurements(self) -> None:
+        tables = self.load_tables()
+        app = self.run_app(tables)
+        self.temperature_loader.assert_not_called()
+        app.radio(key="view").set_value("Programación diaria").run()
+        self.assertEqual(list(app.exception), [])
+        markup = "\n".join(item.value for item in app.markdown)
+        self.assertLess(markup.index("Coste del día"), markup.index("Temperatura diaria"))
+        self.assertLess(markup.index("Temperatura diaria"), markup.index("Regla de decisión"))
+        for text in ("-2,0 °C", "18,0 °C", "8,0 °C", "06:15", "15:45", "MADRID", "SEVILLA"):
+            self.assertIn(text, markup)
+        app.button(key="schedule_day_2026-01-02").click().run()
+        self.assertEqual(list(app.exception), [])
+        markup = "\n".join(item.value for item in app.markdown)
+        for text in ("0,0 °C", "Sin dato", "Hora no disponible"):
+            self.assertIn(text, markup)
+        self.assertNotIn("-2,0 °C", markup)
+        self.assertEqual(self.temperature_loader.call_count, 1)
+        app.selectbox(key="schedule_month").set_value(pd.Timestamp("2026-03-01").date()).run()
+        app.button(key="schedule_day_2026-03-29").click().run()
+        self.assertTrue(any("No hay datos de temperatura" in item.value for item in app.info))
+        self.assertEqual(list(app.exception), [])
+        with patch.object(data_loader, "load_gold_tables", return_value=tables):
+            next(button for button in app.button if button.label == "Actualizar datos de S3").click().run()
+        self.assertEqual(self.temperature_loader.call_count, 2)
+
+    def test_temperature_s3_error_does_not_block_energy_results(self) -> None:
+        self.temperature_loader.side_effect = ClientError({"Error": {"Code": "AccessDenied"}}, "GetObject")
+        app = self.run_app(self.load_tables())
+        app.radio(key="view").set_value("Programación diaria").run()
+        self.assertEqual(list(app.exception), [])
+        self.assertIn("AccessDenied", app.error[0].value)
+        self.assertEqual(len(app.get("download_button")), 1)
+        self.assertIn("Regla de decisión", "\n".join(item.value for item in app.markdown))
 
     def test_app_stops_on_loading_error(self) -> None:
         with patch.object(data_loader, "load_gold_tables", side_effect=ValueError("tablas incompatibles")):

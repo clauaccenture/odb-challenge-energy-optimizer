@@ -1,10 +1,11 @@
 # Dashboard Streamlit
 
-La app lee exclusivamente las tablas Gold Parquet generadas por [03_gold_redata.py](../notebooks/03_gold_redata.py), desde estos objetos de S3:
+La app lee exclusivamente las tablas Gold Parquet de REData y AEMET, desde estos objetos de S3:
 
 ```text
 s3://energy-optimizer-grupo4/outputs/redata/gold_plan_mensual.parquet
 s3://energy-optimizer-grupo4/outputs/redata/gold_programacion_horaria.parquet
+s3://energy-optimizer-grupo4/outputs/aemet/gold_temperatura_diaria.parquet
 ```
 
 La región es `eu-north-1`. El bucket, prefijo y región están definidos en [data_loader.py](data_loader.py). No se utilizan CSV locales ni hay una alternativa local si falla S3.
@@ -14,6 +15,8 @@ La región es `eu-north-1`. El bucket, prefijo y región están definidos en [da
 `gold_programacion_horaria.parquet` contiene `fecha_local`, `hora_local`, `precio_eur_mwh`, `consumo_baseline_mwh`, `consumo_optimizado_mwh`, `coste_baseline_eur` y `coste_optimizado_eur`. Gold garantiza el orden cronológico de sus filas.
 
 Los antiguos `gold_plan_horario.parquet` y `gold_resumen_diario.parquet` no se leen, aunque sigan en S3: el proceso actual ya no los actualiza. Los totales diarios se obtienen sumando la programación publicada durante la carga cacheada, sin recalcular la optimización.
+
+La tabla AEMET sigue el contrato de [03_gold_aemet.py](../notebooks/03_gold_aemet.py): una fila por `fecha`, con `tmed`, `tmin`, `tmax` y `localidad_tmin`, `provincia_tmin`, `hora_tmin` (y sus equivalentes `_tmax`). Es un resumen **nacional**, no provincial: no permite un selector de provincia. La media diaria es la media de las medias provinciales, con el mismo peso para cada provincia. Los extremos publicados priorizan estaciones con hora disponible y las horas se muestran tal como las entrega AEMET, sin conversión de zona horaria.
 
 ## Acceso desde EC2
 
@@ -30,14 +33,15 @@ La conexión usa `boto3` y su cadena estándar de credenciales AWS. En EC2 se re
       "Action": "s3:GetObject",
       "Resource": [
         "arn:aws:s3:::energy-optimizer-grupo4/outputs/redata/gold_plan_mensual.parquet",
-        "arn:aws:s3:::energy-optimizer-grupo4/outputs/redata/gold_programacion_horaria.parquet"
+        "arn:aws:s3:::energy-optimizer-grupo4/outputs/redata/gold_programacion_horaria.parquet",
+        "arn:aws:s3:::energy-optimizer-grupo4/outputs/aemet/gold_temperatura_diaria.parquet"
       ]
     }
   ]
 }
 ```
 
-No se necesita listar el bucket: se leen los dos objetos por su clave exacta. Si están cifrados con una clave KMS administrada por el cliente, también se necesita `kms:Decrypt` para esa clave y autorización en su política.
+No se necesita listar el bucket: se leen los objetos por su clave exacta. Si están cifrados con una clave KMS administrada por el cliente, también se necesita `kms:Decrypt` para esa clave y autorización en su política.
 
 La instancia necesita conectividad con S3, por ejemplo mediante salida HTTPS o un endpoint de VPC para S3. Las políticas del bucket y del endpoint también deben permitir la lectura.
 
@@ -45,16 +49,16 @@ La instancia necesita conectividad con S3, por ejemplo mediante salida HTTPS o u
 
 La app descarga los Parquet en memoria y mantiene los resultados validados en caché durante cinco minutos. Cambiar filtros o pantallas no vuelve a descargar los archivos mientras la caché siga vigente.
 
-El botón **Actualizar datos de S3** invalida la caché y vuelve a cargar ambos objetos. La expiración de la caché se comprueba en la siguiente ejecución de la app; no hay sondeo automático.
+El botón **Actualizar datos de S3** invalida ambas cachés. REData se vuelve a cargar de inmediato y AEMET al mostrar la programación diaria. La expiración de la caché se comprueba en la siguiente ejecución de la app; no hay sondeo automático.
 
 Los dos archivos deben proceder de la misma ejecución de Gold. Actualiza el dashboard solo cuando haya finalizado la subida de ambos: las dos lecturas de S3 no constituyen una transacción.
 
-No se descargan fuentes de REData, no se recalcula la optimización y no se escribe en S3. Si faltan credenciales, permisos, archivos o coherencia entre las tablas, la app muestra el error y detiene la carga.
+No se descargan fuentes de REData, no se recalcula la optimización y no se escribe en S3. Si faltan credenciales, permisos, archivos o coherencia entre las tablas REData, la app muestra el error y detiene la carga. AEMET se carga por separado solo en la programación diaria y mantiene su propia caché de cinco minutos: un error muestra el detalle y el origen S3 dentro del panel de temperatura, sin bloquear los resultados energéticos.
 
 ## Pantallas y validaciones
 
 1. **Resumen ejecutivo**: costes S0/S1, ahorro total y porcentaje ponderado, ahorro mensual, cobertura y selección de fecha.
-2. **Programación diaria**: intervalos locales, precios, consumos, costes S0/S1 y horas seleccionadas por Gold, junto con sus totales diarios y descarga CSV. La asignación se muestra tal como viene en el Parquet.
+2. **Programación diaria**: intervalos locales, precios, consumos, costes S0/S1 y horas seleccionadas por Gold, junto con sus totales diarios y descarga CSV. Debajo de **Coste del día**, el panel **Temperatura diaria · España** muestra mínima, máxima (con hora, localidad y provincia) y media nacional de la fecha seleccionada. Si falta la fecha se indica explícitamente; los valores u horas nulos se muestran como no disponibles, nunca como cero. La asignación se muestra tal como viene en el Parquet.
 3. **Evolución del ahorro**: acumulado, aportación mensual y filtro trimestral. Un trimestre sin registros muestra ausencia de resultados, no ahorro cero.
 
 La fecha de programación se selecciona mediante el mismo calendario mensual en el resumen ejecutivo y en la programación diaria. Al pulsar la fecha se abre el calendario; el selector de mes permite recorrer el año elegido en la barra lateral.
