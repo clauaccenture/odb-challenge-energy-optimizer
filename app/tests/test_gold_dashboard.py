@@ -366,6 +366,28 @@ class GoldDashboardTests(unittest.TestCase):
         self.assertNotIn("-99,0 °C", markup)
         self.assertEqual(len(app.get("download_button")), 1)
 
+    def test_temperature_fallback_skips_selected_date_with_all_measurements_missing(self) -> None:
+        missing = self.temperature_source.iloc[[0]].copy()
+        missing["fecha"] = pd.Timestamp("2026-10-22").date()
+        missing[["tmin", "tmax", "tmed"]] = None
+        previous = self.temperature_source.iloc[[0]].copy()
+        previous["fecha"] = pd.Timestamp("2026-10-19").date()
+        previous[["tmin", "tmax", "tmed"]] = [-1.0, 20.0, 10.0]
+        self.temperature_loader.return_value = pd.concat([missing, previous], ignore_index=True)
+        app = self.run_app(self.load_tables())
+        app.radio(key="view").set_value("Programación diaria").run()
+        app.selectbox(key="schedule_month").set_value(pd.Timestamp("2026-10-01").date()).run()
+        app.button(key="schedule_day_2026-10-25").click().run()
+        self.assertEqual(list(app.exception), [])
+        self.assertTrue(any(
+            "19 octubre 2026" in item.value and "el día más reciente" in item.value
+            for item in app.caption
+        ))
+        markup = "\n".join(item.value for item in app.markdown)
+        self.assertIn("-1,0 °C", markup)
+        self.assertIn("20,0 °C", markup)
+        self.assertIn("10,0 °C", markup)
+
     def test_temperature_without_prior_data_does_not_use_future_measurements(self) -> None:
         for table in (self.temperature_source, self.temperature_source.iloc[:0]):
             with self.subTest(empty=table.empty):

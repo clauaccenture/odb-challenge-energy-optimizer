@@ -319,7 +319,8 @@ def render_daily_temperature(selected_date: date) -> None:
             st.error(f"No se pudieron cargar las temperaturas Gold: {error}")
             st.caption(f"Origen S3: {TEMPERATURE_S3_URI}")
             return
-        available = temperatures.loc[temperatures["fecha"] <= selected_date]
+        has_temperature = temperatures[["tmin", "tmax", "tmed"]].notna().any(axis=1)
+        available = temperatures.loc[(temperatures["fecha"] <= selected_date) & has_temperature]
         if available.empty:
             st.caption("No hay datos de temperatura disponibles para la fecha elegida ni para días anteriores.")
             return
