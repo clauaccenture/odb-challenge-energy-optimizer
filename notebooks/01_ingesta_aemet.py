@@ -24,6 +24,9 @@ Ejemplo con S3:
     python notebooks/01_ingesta_aemet.py \
         --start 2025-01-01 \
         --end 2025-12-31
+
+Actualización diaria desde el histórico raw local:
+    python notebooks/01_ingesta_aemet.py --daily --end 2026-10-22
 """
 
 import os
@@ -90,6 +93,21 @@ def chunks_15_days(start: date, end: date):
 # DESCARGA DE DATOS AEMET
 # --------------------------------------------------
 
+class NoDataAvailable(RuntimeError):
+    """La API confirma que no hay datos para el periodo solicitado."""
+
+
+def validate_records(datos, start: date, end: date) -> None:
+    if not isinstance(datos, list) or not datos:
+        raise ValueError("AEMET debe devolver una lista no vacía de registros.")
+    for row in datos:
+        if not isinstance(row, dict) or not isinstance(row.get("fecha"), str):
+            raise ValueError("AEMET ha devuelto un registro sin fecha válida.")
+        record_date = date.fromisoformat(row["fecha"])
+        if not start <= record_date <= end:
+            raise ValueError(f"AEMET ha devuelto una fecha fuera del rango: {record_date}")
+
+
 def fetch(start: date, end: date):
     """
     Descarga los datos climatológicos de AEMET
@@ -130,9 +148,17 @@ def fetch(start: date, end: date):
         timeout=60
     )
 
+    if response.status_code == 404:
+        raise NoDataAvailable(f"AEMET sin datos para {start} -> {end}")
     response.raise_for_status()
 
     respuesta = response.json()
+    if not isinstance(respuesta, dict):
+        raise ValueError("Respuesta de control AEMET no válida.")
+    if respuesta.get("estado") == 404:
+        raise NoDataAvailable(f"AEMET sin datos para {start} -> {end}")
+    if respuesta.get("estado", 200) != 200:
+        raise RuntimeError(f"Estado AEMET inesperado: {respuesta.get('estado')}")
 
     # Comprobar que AEMET devuelve
     # correctamente la URL de descarga
@@ -154,6 +180,9 @@ def fetch(start: date, end: date):
     response_datos.raise_for_status()
 
     datos = response_datos.json()
+    if datos == []:
+        raise NoDataAvailable(f"AEMET sin registros para {start} -> {end}")
+    validate_records(datos, start, end)
 
     return datos
 
@@ -301,6 +330,71 @@ def upload_s3(
 # MAIN
 # --------------------------------------------------
 
+def save_ingestion_scope(status: str, files: list[str]) -> None:
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    path = RAW_DIR / "last_ingestion.json"
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps({
+        "status": status,
+        "files": files,
+        "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+    }, indent=2), encoding="utf-8")
+    temporary.replace(path)
+
+
+def ingest_daily(target: date, no_s3: bool) -> None:
+    save_ingestion_scope("running", [])
+    latest = None
+    latest_path = None
+    for path in sorted(RAW_DIR.glob("aemet_*.json")):
+        records = json.loads(path.read_text(encoding="utf-8"))
+        validate_records(records, date.min, date.max)
+        eligible = [date.fromisoformat(row["fecha"]) for row in records
+                    if date.fromisoformat(row["fecha"]) <= target]
+        if eligible and (latest is None or max(eligible) > latest):
+            latest = max(eligible)
+            latest_path = path
+
+    if latest is None or latest_path is None:
+        raise ValueError("No hay histórico AEMET local hasta la fecha objetivo. "
+                         "Ejecuta primero una carga con --start y --end.")
+    if not no_s3 and not BUCKET:
+        raise ValueError("S3_BUCKET no está definido.")
+
+    print(f"Fecha objetivo AEMET: {target} | última fecha raw local: {latest}")
+    # Recupera una subida fallida tras guardar el último raw en una ejecución anterior.
+    if not no_s3:
+        upload_s3(latest_path)
+
+    pending = []
+    current = target
+    while current > latest:
+        try:
+            records = fetch(current, current)
+        except NoDataAvailable as error:
+            print(f"SIN DATOS PUBLICADOS: {error}")
+        else:
+            validate_records(records, current, current)
+            pending.append((current, records))
+        current -= timedelta(days=1)
+
+    # Publicar de antiguo a reciente permite recuperar la última subida si falla S3.
+    for day, records in reversed(pending):
+        path = save_local(records, day, day)
+        save_manifest(path, day, day, len(records))
+        if not no_s3:
+            upload_s3(path)
+
+    save_ingestion_scope("completed", [
+        f"aemet_{day}_{day}.json" for day, _ in reversed(pending)
+    ])
+    if pending:
+        print(f"AEMET: {len(pending)} días nuevos guardados. "
+              f"Última fecha disponible: {pending[0][0]}")
+    else:
+        print(f"AEMET SIN NOVEDADES. Se conserva la fecha {latest}.")
+
+
 def main():
 
     parser = argparse.ArgumentParser(
@@ -312,7 +406,6 @@ def main():
 
     parser.add_argument(
         "--start",
-        required=True,
         type=date.fromisoformat,
         help=(
             "Fecha inicial en formato "
@@ -331,6 +424,12 @@ def main():
     )
 
     parser.add_argument(
+        "--daily",
+        action="store_true",
+        help="Buscar días publicados desde --end hacia atrás hasta el histórico raw local."
+    )
+
+    parser.add_argument(
         "--no-s3",
         action="store_true",
         help=(
@@ -339,6 +438,14 @@ def main():
     )
 
     args = parser.parse_args()
+
+    if args.daily:
+        if args.start is not None:
+            parser.error("--daily no admite --start.")
+        ingest_daily(args.end, args.no_s3)
+        return
+    if args.start is None:
+        parser.error("--start es obligatorio salvo con --daily.")
 
     # Comprobar rango
     if args.end < args.start:
@@ -349,6 +456,8 @@ def main():
 
     total_bloques = 0
     total_registros = 0
+    ingested_files = []
+    save_ingestion_scope("running", [])
 
     # Dividir automáticamente
     # el periodo en bloques de 15 días
@@ -403,7 +512,9 @@ def main():
 
         total_bloques += 1
         total_registros += len(datos)
+        ingested_files.append(archivo.name)
 
+    save_ingestion_scope("completed", ingested_files)
     # Resumen
     print("\n" + "=" * 60)
     print("INGESTA AEMET FINALIZADA")

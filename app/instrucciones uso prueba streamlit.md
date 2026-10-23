@@ -7,7 +7,7 @@ Guía interna para abrir la app de EC2 desde un PC Windows mediante un túnel SS
 - La EC2 está encendida en **Estocolmo (`eu-north-1`)**.
 - El repositorio ya está en `/home/ssm-user/energy-optimizer-s3-test`, en la rama **`develop`**.
 - Python 3.11, el entorno `.venv` y las dependencias ya están instalados en EC2.
-- La app lee Gold desde `s3://energy-optimizer-grupo4/outputs/`. No hay que descargar los datos al PC.
+- La app adaptada al contrato actual lee `gold_plan_mensual.parquet` y `gold_programacion_horaria.parquet` desde `s3://energy-optimizer-grupo4/outputs/redata/`. Antes de probar, comprobar que esta adaptación esté integrada en `develop` y desplegada en EC2. No hay que descargar los datos al PC.
 - Cada persona necesita acceso corporativo AWS y permisos para iniciar sesiones SSM y usar `AWS-StartPortForwardingSession`.
 
 **Una persona arranca Streamlit en la EC2 compartida; cada compañero abre su propio túnel en su PC.** Si Streamlit ya está funcionando, no arrancar otra copia ni actualizar el código sin avisar.
@@ -61,6 +61,33 @@ aws sts get-caller-identity --profile energy-optimizer --region eu-north-1
 Debe devolver la identidad esperada. No compartir la salida completa ni códigos de acceso. Si aparece `AccessDenied` o se exige otro método corporativo, consultar al administrador; no crear claves para evitarlo.
 
 ## 3. EC2: actualizar y arrancar la app
+
+### Prueba temporal de la adaptación REData antes de fusionarla
+
+La adaptación a los dos nuevos Parquet se prueba desde `feature_connect_s3_bucket` hasta que se fusione en `develop`. Avisar al equipo y detener la app con Ctrl+C en su consola antes de cambiar la rama compartida.
+
+En EC2, ejecutar uno por uno:
+
+```bash
+cd /home/ssm-user/energy-optimizer-s3-test
+git status --short --branch
+```
+
+Si hay cambios locales, detenerse sin descartarlos. Si está limpio:
+
+```bash
+git fetch origin
+git switch feature_connect_s3_bucket
+git pull --ff-only origin feature_connect_s3_bucket
+git log -1 --oneline
+source .venv/bin/activate
+python -m unittest discover -s app/tests -v
+python -m streamlit run app/streamlit_app.py --server.address 127.0.0.1 --server.port 8501 --server.headless true --browser.gatherUsageStats false
+```
+
+Si cualquier comando falla, no continuar. Abrir el túnel del paso 4 y probar el dashboard del paso 5. Las pruebas automáticas usan S3 simulado; abrir la app comprueba la lectura real de S3. El rol de EC2 necesita `s3:GetObject` sobre `outputs/redata/gold_plan_mensual.parquet` y `outputs/redata/gold_programacion_horaria.parquet`.
+
+El procedimiento que sigue corresponde al despliegue habitual de `develop`, no a esta prueba temporal.
 
 **Solo lo hace una persona.** Si la app ya funciona y está actualizada, pasar al paso 4.
 

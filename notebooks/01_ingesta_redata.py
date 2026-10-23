@@ -11,6 +11,8 @@ Es reanudable: si un dia ya existe en data/raw/redata/ no se vuelve a descargar
 (solo se sube a S3 si hace falta). Usa --force para descargar de nuevo.
 Si un dia falla tras los reintentos, se anota y se continua con el resto; al final
 se listan los dias fallidos y el script termina con error para poder relanzarlo.
+Una respuesta válida sin precios spot se informa como ausencia de novedades,
+sin guardar un raw vacío ni hacer fallar la ejecución.
  
 Uso (desde la raiz del repo):
     python notebooks/01_ingesta_redata.py --start 2026-03-10 --end 2026-03-10 --preview --no-s3
@@ -69,11 +71,18 @@ def fetch(start: date, end: date, retries: int = 4) -> dict:
  
 def spot_values(payload: dict) -> list | None:
     """Valores de la serie 'Precio mercado spot', o None si no esta en la respuesta."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("included"), list):
+        raise ValueError("Respuesta REData no válida: falta la lista 'included'.")
     spot = next(
         (s for s in payload.get("included", []) if s["attributes"]["title"] == SPOT_TITLE),
         None,
     )
-    return None if spot is None else spot["attributes"]["values"]
+    if spot is None:
+        return None
+    values = spot["attributes"]["values"]
+    if not isinstance(values, list):
+        raise ValueError("Respuesta REData no válida: 'values' debe ser una lista.")
+    return values
  
  
 def save_local(payload: dict, start: date, end: date) -> Path:
@@ -124,6 +133,7 @@ def main() -> None:
  
     subir = bool(BUCKET) and not args.no_s3
     descargados, omitidos, fallidos, avisos = 0, 0, [], []
+    sin_datos = []
  
     for s, e in day_chunks(args.start, args.end):
         path = raw_path(s, e)
@@ -145,8 +155,8 @@ def main() -> None:
  
         values = spot_values(payload)
         if not values:
-            print(f"  ERROR: la respuesta no trae la serie '{SPOT_TITLE}'")
-            fallidos.append(str(s))
+            print(f"  REDATA SIN DATOS PUBLICADOS para {s}: no hay precios spot nuevos que ingestar.")
+            sin_datos.append(str(s))
             continue
         if len(values) not in VALORES_ESPERADOS:
             print(f"  AVISO: {len(values)} valores (esperados {VALORES_ESPERADOS})")
@@ -163,7 +173,7 @@ def main() -> None:
  
     total = (args.end - args.start).days + 1
     print(f"\nResumen: {total} dias | descargados: {descargados} | "
-          f"ya existian: {omitidos} | fallidos: {len(fallidos)}")
+          f"ya existian: {omitidos} | sin datos publicados: {len(sin_datos)} | fallidos: {len(fallidos)}")
     if avisos:
         print("Dias con un numero de valores inesperado:")
         for a in avisos:

@@ -147,18 +147,39 @@ def main() -> None:
         raise FileNotFoundError(f"No existe {SILVER}. Ejecuta antes 02_calidad_aemet.py")
     gold, n_prov, saltados = build_gold(load_silver(SILVER))
 
+    report_path = SILVER.parent / "calidad_aemet.json"
+    if not report_path.exists():
+        raise FileNotFoundError(f"No existe {report_path}. Ejecuta antes 02_calidad_aemet.py")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    if report.get("scope") == "last_ingestion":
+        dates = report["ingested_dates"]
+        if not isinstance(dates, list) or any(not isinstance(day, str) for day in dates):
+            raise ValueError("Fechas de última ingesta no válidas en el informe de calidad.")
+        warning_dates = set(dates)
+        print(f"Avisos Gold AEMET de la última ingesta: {len(warning_dates)} días.")
+    else:
+        warning_dates = set(n_prov)
+        print("Avisos Gold AEMET del histórico completo.")
+
     # avisos (no se guardan en la tabla)
     max_prov = max(n_prov.values())
-    incompletos = [f for f, n in n_prov.items() if n < max_prov]
+    incompletos = [f for f, n in n_prov.items() if f in warning_dates and n < max_prov]
     if incompletos:
         print(f"  AVISO: {len(incompletos)} dias con menos de {max_prov} provincias: {incompletos}")
     for var, dias in saltados.items():
+        dias = [day for day in dias if day in warning_dates]
         if dias:
             print(f"  AVISO: {len(dias)} dias en los que la {var} mas extrema no tenia hora y se uso "
                   f"la siguiente estacion con hora: {dias}")
-    sin_hora = int((gold["hora_tmin"].isna() | gold["hora_tmax"].isna()).sum())
+    scoped = gold.loc[gold["fecha"].astype(str).isin(warning_dates)]
+    sin_hora = int((scoped["hora_tmin"].isna() | scoped["hora_tmax"].isna()).sum())
     if sin_hora:
         print(f"  AVISO: {sin_hora} dias sin hora de tmin o de tmax (nulo en la tabla)")
+    missing = sorted(warning_dates - set(n_prov))
+    if missing:
+        print(f"  AVISO: días ingestados sin temperaturas válidas en Gold: {missing}")
+    if not warning_dates:
+        print("GOLD AEMET SIN NOVEDADES: sin días nuevos que evaluar.")
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     out_path = OUT_DIR / OUT_NAME

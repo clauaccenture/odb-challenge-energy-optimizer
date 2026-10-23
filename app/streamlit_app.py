@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from calendar import Calendar
 from datetime import date
+from html import escape
 from textwrap import dedent
 
 import pandas as pd
@@ -12,7 +13,7 @@ import streamlit as st
 from botocore.exceptions import BotoCoreError, ClientError
 from pyarrow import ArrowException
 
-from data_loader import GOLD_S3_URI, load_gold_tables, monthly_results
+from data_loader import GOLD_S3_URI, TEMPERATURE_S3_URI, load_gold_tables, load_temperature_table
 
 
 st.set_page_config(
@@ -127,8 +128,16 @@ def apply_styles() -> None:
         .recommendation { margin-top: 15px; padding: 11px; border-left: 3px solid #1f6e61; background: #e4f2eb; font-size: 11px; }
         .recommendation p { margin: 3px 0 0; color: #405a56; font-size: 10px; }
         .date-preview { margin-top: 8px; color: #1f6e61; font-size: 12px; }
-        [data-testid="stBaseButton-primary"], button[kind="primary"] { background: #1f6e61; border-color: #1f6e61; color: white; border-radius: 5px; }
-        [data-testid="stBaseButton-primary"]:hover, button[kind="primary"]:hover { background: #18574d; border-color: #18574d; color: white; }
+        .stApp [data-testid="stButton"] button,
+        .stApp [data-testid="stDownloadButton"] button { background: #ffffff; border: 1px solid #52756b; color: #183432; border-radius: 5px; }
+        .stApp [data-testid="stButton"] button:hover,
+        .stApp [data-testid="stDownloadButton"] button:hover { background: #e4f2eb; border-color: #1f6e61; color: #183432; }
+        .stApp [data-testid="stButton"] button[kind="primary"] { background: #1f6e61; border-color: #1f6e61; color: #ffffff; }
+        .stApp [data-testid="stButton"] button[kind="primary"]:hover { background: #18574d; border-color: #18574d; color: #ffffff; }
+        .stApp [data-testid="stButton"] button [data-testid="stMarkdownContainer"] p,
+        .stApp [data-testid="stDownloadButton"] button [data-testid="stMarkdownContainer"] p { color: inherit; }
+        .stApp [data-testid="stButton"] button:focus-visible,
+        .stApp [data-testid="stDownloadButton"] button:focus-visible { outline: 3px solid #1f6e61; outline-offset: 3px; }
         [data-baseweb="input"] > div, [data-baseweb="select"] > div { background: white; color: #183432; border-color: #dce4df; border-radius: 5px; }
         label [data-testid="stMarkdownContainer"] p { color: #405a56; font-size: 11px; }
         .stApp [data-testid="stSidebar"] [role="radiogroup"] label p { color: #c7d7d0; font-size: 13px; }
@@ -198,7 +207,7 @@ def render_date_picker(dates: list[date]) -> date:
     months = [date(selected_date.year, month, 1) for month in range(1, 13)]
     if st.session_state.get("schedule_month") not in months:
         st.session_state.schedule_month = selected_date.replace(day=1)
-    st.caption("Día de programación")
+    st.caption("Día de resultados")
     with st.popover(format_date(selected_date), icon=":material/calendar_month:", width="stretch"):
         month = st.selectbox(
             "Mes del calendario", months, key="schedule_month",
@@ -216,8 +225,8 @@ def render_date_picker(dates: list[date]) -> date:
                         disabled=not available,
                         type="primary" if day == selected_date else "secondary",
                         help=(
-                            f"Ver programación del {day:%d/%m/%Y}"
-                            if available else f"{day:%d/%m/%Y}: sin programación disponible en este mes"
+                            f"Ver resultados del {day:%d/%m/%Y}"
+                            if available else f"{day:%d/%m/%Y}: sin resultados disponibles en este mes"
                         ),
                         on_click=save_selected_date,
                         args=(day,),
@@ -231,10 +240,9 @@ def open_daily_schedule() -> None:
     st.session_state.view = VIEWS[1]
 
 
-def render_summary(monthly: pd.DataFrame, daily: pd.DataFrame) -> None:
+def render_summary(monthly: pd.DataFrame, daily: pd.DataFrame, saving: float) -> None:
     cost_s0 = float(daily["coste_baseline_total_eur"].sum())
     cost_s1 = float(daily["coste_optimizado_total_eur"].sum())
-    saving = cost_s0 - cost_s1
     saving_pct = saving / cost_s0 * 100 if cost_s0 else float("nan")
     dates = daily["fecha_local"].tolist()
     metrics = st.columns(4)
@@ -249,7 +257,7 @@ def render_summary(monthly: pd.DataFrame, daily: pd.DataFrame) -> None:
 
     chart_column, insight_column = st.columns([1.75, .92])
     with chart_column, st.container(border=True):
-        panel_heading("Ahorro por mes", "Suma de los días válidos disponibles; no se extrapolan meses incompletos.")
+        panel_heading("Ahorro por mes", "Indicador mensual leído de Gold; no se extrapolan meses incompletos.")
         markup(f'<div class="chart-total"><strong>{format_eur(saving)}</strong>ahorro acumulado del período</div>')
         options = monthly["month"].tolist()
         if st.session_state.get("summary_month") not in options:
@@ -268,7 +276,7 @@ def render_summary(monthly: pd.DataFrame, daily: pd.DataFrame) -> None:
             xaxis=dict(fixedrange=True, showgrid=False),
             yaxis=dict(visible=False, fixedrange=True, rangemode="tozero"),
         )
-        st.plotly_chart(figure, use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(figure, config={"displayModeBar": False})
         selected = st.selectbox("Mes seleccionado", options, key="summary_month", format_func=month_label, label_visibility="collapsed")
         selected_month = monthly.loc[monthly["month"] == selected].iloc[0]
         markup(f'<div class="selected-month"><span>{month_label(selected)} · {int(selected_month["days"])} días</span><strong>{format_eur(selected_month["saving_eur"])}</strong></div>')
@@ -297,13 +305,59 @@ def render_summary(monthly: pd.DataFrame, daily: pd.DataFrame) -> None:
         st.button("Ver programación diaria →", type="primary", on_click=open_daily_schedule, width="stretch")
 
 
+@st.cache_data(ttl=300, max_entries=1, show_spinner="Cargando temperaturas Gold desde S3...")
+def cached_temperature_table() -> pd.DataFrame:
+    return load_temperature_table()
+
+
+def render_daily_temperature(selected_date: date) -> None:
+    with st.container(border=True):
+        panel_heading("Temperatura diaria · España", "AEMET · resumen nacional")
+        try:
+            temperatures = cached_temperature_table()
+        except (BotoCoreError, ClientError, ArrowException, OSError, ValueError, KeyError) as error:
+            st.error(f"No se pudieron cargar las temperaturas Gold: {error}")
+            st.caption(f"Origen S3: {TEMPERATURE_S3_URI}")
+            return
+        has_temperature = temperatures[["tmin", "tmax", "tmed"]].notna().any(axis=1)
+        available = temperatures.loc[(temperatures["fecha"] <= selected_date) & has_temperature]
+        if available.empty:
+            st.caption("No hay datos de temperatura disponibles para la fecha elegida ni para días anteriores.")
+            return
+        temperature_date = available["fecha"].max()
+        row = available.loc[available["fecha"] == temperature_date].iloc[0]
+        if temperature_date != selected_date:
+            st.caption(
+                f"Las temperaturas mostradas corresponden al {format_date(temperature_date)}, "
+                "el día más reciente con datos disponibles anterior a la fecha elegida."
+            )
+        else:
+            st.caption(f"Temperaturas del {format_date(temperature_date)}.")
+        for column, label in (("tmin", "Mínima nacional"), ("tmax", "Máxima nacional"), ("tmed", "Media diaria nacional")):
+            value = "Sin dato" if pd.isna(row[column]) else f"{format_number(row[column], 1)} °C"
+            if column == "tmed":
+                detail = "Media de las medias provinciales; cada provincia tiene el mismo peso."
+            elif pd.isna(row[column]):
+                detail = "Sin medición disponible."
+            else:
+                hour = row[f"hora_{column}"]
+                time_label = "Hora no disponible" if pd.isna(hour) else f"A las {hour}"
+                location = [
+                    str(row[key]) for key in (f"localidad_{column}", f"provincia_{column}")
+                    if pd.notna(row[key])
+                ]
+                detail = " · ".join([time_label, *location])
+            markup(f'<div class="daily-result"><span>{label}</span><strong>{value}</strong>'
+                   f'<small>{escape(detail)}</small></div>')
+
+
 def render_daily_schedule(schedule: pd.DataFrame, totals: pd.Series) -> None:
     markup(f'<p class="section-intro">Plan Gold · {int(totals["horas_del_dia"])} intervalos horarios reales · Europe/Madrid. Los cambios de hora se conservan.</p>')
     table_column, summary_column = st.columns([1.35, .65])
     with table_column, st.container(border=True):
         panel_heading(
             f"Programación horaria · {format_date(st.session_state.selected_date)}",
-            "Precios REData · asignación S0/S1 leída del plan horario Gold.",
+            "Precios REData · asignación S0/S1 leída de la programación horaria Gold.",
         )
         markup('<span class="sample-label">Resultados Gold</span>')
         rows = []
@@ -327,23 +381,27 @@ def render_daily_schedule(schedule: pd.DataFrame, totals: pd.Series) -> None:
                '<th>Hora</th><th class="numeric">Precio EUR/MWh</th><th class="numeric">S0 MWh</th>'
                '<th class="numeric">S1 MWh</th><th class="numeric">Coste S0</th><th class="numeric">Coste S1</th><th>Acción S1</th></tr></thead><tbody>'
                + "".join(rows) + '</tbody></table></div>')
-        st.download_button("Descargar plan del día", schedule.to_csv(index=False).encode("utf-8"), file_name=f"plan_{st.session_state.selected_date}.csv", mime="text/csv")
+        st.download_button(
+            "Descargar plan del día", schedule.to_csv(index=False).encode("utf-8"),
+            file_name=f"plan_{st.session_state.selected_date}.csv", mime="text/csv",
+        )
     with summary_column:
         with st.container(border=True):
-            panel_heading("Coste del día", "Resultados del resumen diario Gold · estado óptimo")
+            panel_heading("Coste del día", "Suma de los resultados horarios Gold · sin reoptimizar")
             markup(f"""
                 <div class="daily-result"><span>Coste S0</span><strong>{format_eur(totals['coste_baseline_total_eur'])}</strong><small>{format_number(totals['consumo_baseline_total_mwh'])} MWh de consumo de referencia.</small></div>
                 <div class="daily-result"><span>Coste S1</span><strong>{format_eur(totals['coste_optimizado_total_eur'])}</strong><small>{format_number(totals['consumo_optimizado_total_mwh'])} MWh de consumo optimizado.</small></div>
                 <div class="daily-result"><span>Ahorro del día</span><strong class="positive">{format_eur(totals['ahorro_eur'])}</strong><small>{format_pct(totals['ahorro_pct'])} sobre el coste S0 del día.</small></div>
                 <div class="notice">Resultado del escenario de carga flexible; no es la factura final. El ahorro de este día no se extrapola al año.</div>
             """)
+        render_daily_temperature(st.session_state.selected_date)
         with st.container(border=True):
-            panel_heading("Regla de decisión", "Aplicada por el proceso Gold; la app solo lee resultados")
+            panel_heading("Regla de decisión", "Parámetros del caso 4 · aplicados por el proceso Gold")
             markup(f'<div class="formula">energía diaria = {format_number(totals["energia_flexible_objetivo_mwh"])} MWh<br>límite = {format_number(totals["limite_flexible_mwh_por_hora"])} MWh/h<br>priorizar precios más bajos<br>empates: 08:00–17:00 y hora más temprana</div>')
-            st.caption(f"Política de precios: {totals['politica_negativos']}")
+            st.caption("Política del caso 4: precios negativos a cero antes de la media horaria (aplicada en Silver).")
 
 
-def render_analysis(monthly: pd.DataFrame) -> None:
+def render_analysis(monthly: pd.DataFrame, period_saving: float) -> None:
     note_column, filter_column = st.columns([2, 1])
     with note_column:
         markup('<p class="section-intro">Resultados Gold · agregados de los días válidos disponibles.</p>')
@@ -360,7 +418,7 @@ def render_analysis(monthly: pd.DataFrame) -> None:
     if filtered.empty:
         st.info("No hay resultados disponibles para este trimestre. No se interpreta como ahorro cero.")
         return
-    total = float(filtered["saving_eur"].sum())
+    total = period_saving if period == periods[0] else float(filtered["saving_eur"].sum())
     best = filtered.loc[filtered["saving_eur"].idxmax()]
     metrics = st.columns(3)
     with metrics[0]:
@@ -390,7 +448,7 @@ def render_analysis(monthly: pd.DataFrame) -> None:
             xaxis=dict(tickmode="array", tickvals=list(range(1, len(filtered) + 1)), ticktext=names, showgrid=False, zeroline=False, fixedrange=True),
             yaxis=dict(title="EUR", rangemode="tozero", gridcolor="#dce4df", zeroline=False, fixedrange=True),
         )
-        st.plotly_chart(figure, use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(figure, config={"displayModeBar": False})
     with contribution_column:
         markup('<div class="analysis-heading"><h2 class="widget-heading">Aportación mensual</h2>'
                '<p class="panel-subtitle">Ahorro S0 − S1 · EUR</p></div>')
@@ -406,14 +464,14 @@ def render_analysis(monthly: pd.DataFrame) -> None:
 
 
 @st.cache_data(ttl=300, max_entries=1, show_spinner="Cargando tablas Gold desde S3...")
-def cached_gold_tables() -> tuple[pd.DataFrame, pd.DataFrame]:
+def cached_gold_tables() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     return load_gold_tables()
 
 
 def main() -> None:
     apply_styles()
     try:
-        plan, summary = cached_gold_tables()
+        monthly, summary, plan = cached_gold_tables()
     except (BotoCoreError, ClientError, ArrowException, OSError, ValueError, KeyError) as error:
         st.error(f"No se pudieron cargar las tablas Gold: {error}")
         st.caption(f"Origen S3: {GOLD_S3_URI}")
@@ -432,13 +490,16 @@ def main() -> None:
         st.divider()
         markup("""
             <div class="source-box"><div class="source-title">Fuente de datos</div><div class="source-row"><span>REData · precios</span><span class="source-state">Gold S3</span></div></div>
-            <div class="sidebar-note">gold_plan_horario.parquet<br>gold_resumen_diario.parquet<br>Zona horaria: Europe/Madrid</div>
+            <div class="sidebar-note">gold_plan_mensual.parquet<br>gold_programacion_horaria.parquet<br>Zona horaria: Europe/Madrid</div>
         """)
         st.caption(f"Origen S3: {GOLD_S3_URI}")
         if st.button("Actualizar datos de S3"):
             cached_gold_tables.clear()
+            cached_temperature_table.clear()
             st.rerun()
-        st.caption("Caché de datos: 5 minutos. Actualiza tras completar la subida de ambos Parquet.")
+        st.caption("Caché de datos: 5 minutos. Actualiza tras completar la subida de los Parquet de REData y AEMET.")
+    single_year = monthly["month"].str[:4].nunique() == 1
+    monthly = monthly[monthly["month"].str[:4] == str(selected_year)].copy()
     summary = summary[summary["fecha_local"].map(lambda value: value.year == selected_year)].copy()
     daily = summary[summary["estado_optimizacion"] == "optimo"].copy()
     first, last = summary["fecha_local"].min(), summary["fecha_local"].max()
@@ -453,24 +514,28 @@ def main() -> None:
         <div class="topline"><div class="crumb">Energía / <strong>Resultados</strong></div><div class="data-badge">TABLAS GOLD · PARQUET S3</div></div>
         <header class="page-heading"><div><div class="eyebrow">Caso 4 · Carga flexible industrial</div><h1>{view}</h1><p class="heading-sub">{subtitles[view]}</p></div><div class="period-tag">{coverage}</div></header>
     """)
-    st.info(f"Cobertura disponible: {len(daily)} días válidos de {calendar_days} días naturales entre las fechas cargadas; {len(summary) - len(daily)} días excluidos por estado y {calendar_days - len(summary)} sin registro. Los totales no se anualizan ni representan necesariamente meses completos.")
+    st.info(f"Cobertura disponible: {len(daily)} días con programación de {calendar_days} días naturales entre las fechas cargadas; {calendar_days - len(summary)} sin programación publicada. Gold no publica el motivo de las fechas ausentes. Los totales no se anualizan ni representan necesariamente meses completos.")
     if daily.empty:
         st.warning("No hay días con programación válida en el año seleccionado.")
-        st.dataframe(summary, hide_index=True, use_container_width=True)
+        st.dataframe(summary, hide_index=True, width="stretch")
         st.stop()
     dates = daily["fecha_local"].tolist()
     if st.session_state.get("selected_date") not in dates:
         st.session_state.selected_date = dates[0]
-    monthly = monthly_results(summary)
+    # Gold repeats a period-wide total, not a separate total for each year.
+    period_saving = (
+        float(monthly["ahorro_estimado_anual_eur"].iloc[0])
+        if single_year else float(monthly["saving_eur"].sum())
+    )
     if view == VIEWS[0]:
-        render_summary(monthly, daily)
+        render_summary(monthly, daily, period_saving)
     elif view == VIEWS[1]:
         selected_date = render_date_picker(dates)
         schedule = plan[plan["fecha_local"] == selected_date]
         totals = daily.loc[daily["fecha_local"] == selected_date].iloc[0]
         render_daily_schedule(schedule, totals)
     else:
-        render_analysis(monthly)
+        render_analysis(monthly, period_saving)
     markup("""
         <footer class="footer-note"><span><strong>Coste de energía a precio de mercado.</strong> Sin peajes, cargos ni impuestos.</span><span>Resultados del escenario de carga flexible · Caso 4</span></footer>
     """)
