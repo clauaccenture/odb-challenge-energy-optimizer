@@ -1,89 +1,116 @@
 # Dashboard Streamlit
 
-La app utiliza las tablas finales generadas por `03_gold_redata.py`. Cada compañero puede guardar los CSV en cualquier carpeta de su equipo, sin reproducir la estructura de carpetas de otro compañero.
-
-## Configurar la Ruta de los CSV
-
-1. Coloca los dos archivos finales en una misma carpeta de tu PC, conservando estos nombres exactos:
+La app lee exclusivamente las tablas Gold Parquet de REData y AEMET, desde estos objetos de S3:
 
 ```text
-gold_plan_horario.csv
-gold_resumen_diario.csv
+s3://energy-optimizer-grupo4/outputs/redata/gold_plan_mensual.parquet
+s3://energy-optimizer-grupo4/outputs/redata/gold_programacion_horaria.parquet
+s3://energy-optimizer-grupo4/outputs/aemet/gold_temperatura_diaria.parquet
 ```
 
-2. Abre [data_loader.py](data_loader.py) y localiza esta línea al principio del archivo:
+La región es `eu-north-1`. El bucket, prefijo y región están definidos en [data_loader.py](data_loader.py). No se utilizan CSV locales ni hay una alternativa local si falla S3.
 
-```python
-DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2]
+`gold_plan_mensual.parquet` contiene una fila por mes. Sus columnas son `mes`, `precio_spot_medio_mensual_eur_mwh`, `ahorro_estimado_mensual_eur`, `precio_spot_medio_anual_eur_mwh` y `ahorro_estimado_anual_eur`.
+
+`gold_programacion_horaria.parquet` contiene `fecha_local`, `hora_local`, `precio_eur_mwh`, `consumo_baseline_mwh`, `consumo_optimizado_mwh`, `coste_baseline_eur` y `coste_optimizado_eur`. Gold garantiza el orden cronológico de sus filas.
+
+Los antiguos `gold_plan_horario.parquet` y `gold_resumen_diario.parquet` no se leen, aunque sigan en S3: el proceso actual ya no los actualiza. Los totales diarios se obtienen sumando la programación publicada durante la carga cacheada, sin recalcular la optimización.
+
+La tabla AEMET sigue el contrato de [03_gold_aemet.py](../notebooks/03_gold_aemet.py): una fila por `fecha`, con `tmed`, `tmin`, `tmax` y `localidad_tmin`, `provincia_tmin`, `hora_tmin` (y sus equivalentes `_tmax`). Es un resumen **nacional**, no provincial: no permite un selector de provincia. La media diaria es la media de las medias provinciales, con el mismo peso para cada provincia. Los extremos publicados priorizan estaciones con hora disponible y las horas se muestran tal como las entrega AEMET, sin conversión de zona horaria.
+
+## Acceso desde EC2
+
+La conexión usa `boto3` y su cadena estándar de credenciales AWS. En EC2 se recomienda un rol IAM asociado a la instancia mediante un instance profile, sin claves en el código ni en el repositorio.
+
+**Session Manager (SSM) permite acceder a la instancia, pero no concede por sí solo permisos para leer S3.** El rol de la EC2 debe permitir como mínimo:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": [
+        "arn:aws:s3:::energy-optimizer-grupo4/outputs/redata/gold_plan_mensual.parquet",
+        "arn:aws:s3:::energy-optimizer-grupo4/outputs/redata/gold_programacion_horaria.parquet",
+        "arn:aws:s3:::energy-optimizer-grupo4/outputs/aemet/gold_temperatura_diaria.parquet"
+      ]
+    }
+  ]
+}
 ```
 
-3. Sustitúyela por la ruta absoluta de **tu carpeta de CSV**, no por la ruta de un archivo individual. Por ejemplo, si tienes ambos CSV en `D:\Proyecto Energia\resultados_gold`:
+No se necesita listar el bucket: se leen los objetos por su clave exacta. Si están cifrados con una clave KMS administrada por el cliente, también se necesita `kms:Decrypt` para esa clave y autorización en su política.
 
-```python
-DEFAULT_DATA_DIR = Path(r"D:\Proyecto Energia\resultados_gold")
-```
+La instancia necesita conectividad con S3, por ejemplo mediante salida HTTPS o un endpoint de VPC para S3. Las políticas del bucket y del endpoint también deben permitir la lectura.
 
-El prefijo `r` permite usar las barras de Windows sin escaparlas. Puedes usar espacios en la ruta. Cambia el ejemplo por tu ubicación real; no necesitas mover los CSV junto al código ni usar la ruta de otro compañero. En macOS o Linux, el equivalente sería `Path("/home/usuario/datos/gold")`.
+## Carga y actualización
 
-La app buscará ambos nombres dentro de esa carpeta. Los dos CSV deben corresponder a la misma ejecución del proceso Gold. La columna `datetime_utc` no es necesaria: la app utiliza `datetime_local` con su desplazamiento horario.
+La app descarga los Parquet en memoria y mantiene los resultados validados en caché durante cinco minutos. Cambiar filtros o pantallas no vuelve a descargar los archivos mientras la caché siga vigente.
 
-Si no cambias `DEFAULT_DATA_DIR`, se mantiene el comportamiento original: buscar los CSV en la carpeta superior a `repo_grupo_4`.
+El botón **Actualizar datos de S3** invalida ambas cachés. REData se vuelve a cargar de inmediato y AEMET al mostrar la programación diaria. La expiración de la caché se comprueba en la siguiente ejecución de la app; no hay sondeo automático.
 
-No se descargan fuentes, no se recalcula la optimización y no se accede a S3 al abrir la app. Cada recarga vuelve a leer los CSV. Si faltan archivos o no concuerdan las tablas, se muestra un error y se detiene la carga. La app muestra la carpeta de lectura para que puedas comprobar que está apuntando a tu ubicación.
+Los dos archivos deben proceder de la misma ejecución de Gold. Actualiza el dashboard solo cuando haya finalizado la subida de ambos: las dos lecturas de S3 no constituyen una transacción.
 
-## Pantallas
+No se descargan fuentes de REData, no se recalcula la optimización y no se escribe en S3. Si faltan credenciales, permisos, archivos o coherencia entre las tablas REData, la app muestra el error y detiene la carga. AEMET se carga por separado solo en la programación diaria y mantiene su propia caché de cinco minutos: un error muestra el detalle y el origen S3 dentro del panel de temperatura, sin bloquear los resultados energéticos.
 
-1. **Resumen ejecutivo**: costes S0/S1, ahorro total y porcentaje ponderado, ahorro mensual, cobertura y selección de una fecha disponible.
-2. **Programación diaria**: intervalos locales, precios con cuatro decimales, consumos y costes S0/S1, resumen del día, parámetros del escenario y descarga del plan seleccionado.
+## Pantallas y validaciones
+
+1. **Resumen ejecutivo**: costes S0/S1, ahorro total y porcentaje ponderado, ahorro mensual, cobertura y selección de fecha.
+2. **Programación diaria**: intervalos locales, precios, consumos, costes S0/S1 y horas seleccionadas por Gold, junto con sus totales diarios y descarga CSV. Debajo de **Coste del día**, el panel **Temperatura diaria · España** muestra mínima, máxima (con hora, localidad y provincia) y media nacional de la fecha seleccionada. Si falta esa fecha, muestra el día más reciente disponible anterior a ella, con una nota discreta que identifica la fecha real de las temperaturas. Nunca utiliza fechas posteriores a la seleccionada. Si tampoco hay días anteriores, indica la ausencia de datos sin bloquear la programación energética. Los valores u horas nulos se muestran como no disponibles, nunca como cero; no se completan con mediciones de otras fechas. La asignación se muestra tal como viene en el Parquet.
 3. **Evolución del ahorro**: acumulado, aportación mensual y filtro trimestral. Un trimestre sin registros muestra ausencia de resultados, no ahorro cero.
 
-El filtro de año se obtiene del resumen diario. Solo se agregan días con `estado_optimizacion=optimo`. Los meses sin registros no se inventan y los períodos parciales no se anualizan. El porcentaje agregado es ahorro total / coste S0 total; con coste S0 cero se muestra "No aplica".
+La fecha de programación se selecciona mediante el mismo calendario mensual en el resumen ejecutivo y en la programación diaria. Al pulsar la fecha se abre el calendario; el selector de mes permite recorrer el año elegido en la barra lateral.
 
-## Lectura y Validación
+Solo están habilitados los días con programación horaria completa y validada. Se deshabilitan tanto los días anteriores o posteriores a la cobertura como los huecos intermedios sin programación publicada. Por ejemplo, con datos hasta el 30 de septiembre de 2026, el 1 de octubre y el 24 de diciembre de 2026 aparecen deshabilitados. El límite se obtiene de Gold, no de la fecha actual del sistema. Al cambiar de año se conserva la fecha si sigue disponible; en caso contrario, se selecciona el primer día válido. El nuevo Gold no publica los días rechazados ni el motivo de exclusión; la app no los inventa.
 
-`data_loader.py` comprueba columnas obligatorias, fechas, estados, valores numéricos finitos, horas completas del día local, energía objetivo, límite horario, costes precio por consumo y coherencia entre el plan y el resumen. Los días incompletos o infactibles del resumen se excluyen de los indicadores y del selector de programación.
+Se validan columnas obligatorias, meses únicos, fechas, valores numéricos finitos, horas completas y ordenadas, energía diaria de 30 MWh, límite de 7 MWh/h y costes como precio por consumo. Se contrastan ahorros y precios medios mensuales con el horario, y los indicadores anuales con el período completo.
 
-Las horas se obtienen exclusivamente de `datetime_local`, con sus desplazamientos horarios y conversión a `Europe/Madrid`. La columna temporal redundante puede retirarse del CSV sin afectar a la app. Se conservan los días de 23, 24 y 25 horas; CET/CEST permite distinguir las horas repetidas en otoño.
+El archivo no incluye timestamps ni desfases UTC. Para mostrar intervalos inequívocos, se genera el calendario horario de cada fecha en `Europe/Madrid` y se comprueba que su secuencia coincide exactamente con `hora_local`. Las filas se asignan en el orden cronológico garantizado por Gold: en otoño las dos horas 02:00 corresponden primero a CEST y luego a CET. No se ordena por `hora_local`, porque eso podría intercambiar las horas repetidas. El CSV incluye `datetime_local` con su desfase, además de las columnas originales. Si Gold deja de garantizar ese orden, deberá publicar un timestamp con zona horaria.
 
-Los precios proceden de REData a través de las capas Silver/Gold; los consumos representan el escenario industrial del caso 4, no mediciones de una planta. Los costes incluyen energía a precio de mercado, sin peajes, cargos ni impuestos.
+El ahorro mensual se lee directamente de Gold; no se reconstruye para los gráficos. Los totales diarios, el porcentaje diario y el número de días por mes se agregan desde las horas una sola vez durante la carga cacheada, ya que Gold no los publica en los nuevos archivos.
 
-Los archivos actuales incluyen el 10 y el 29 de marzo de 2026: 47 horas, coste S0 de 3.661,20 EUR, coste S1 de 2.927,36 EUR y ahorro de 733,84 EUR. Son dos días disponibles dentro de un intervalo de veinte días naturales.
+Los campos llamados anuales representan todo el período cargado, se repiten en cada mes y no están agrupados por año. Con datos de un solo año se utiliza el ahorro anual una sola vez; con varios años se suman los ahorros mensuales del año seleccionado para no mostrar el total global como si fuera anual. Los filtros trimestrales, acumulados y medias mensuales siguen siendo operaciones de presentación.
 
-## Ejecución
+Los costes S0/S1 del período y el porcentaje ponderado siguen calculándose desde los totales disponibles: Gold no publica esos indicadores agregados. Solo se consideran días con programación completa validada. Los meses sin registros no se inventan y los períodos parciales no se anualizan. El porcentaje agregado es ahorro total / coste S0 total; con coste S0 cero se muestra "No aplica".
 
-Necesitas Python 3.10 o superior y la carpeta del proyecto con [streamlit_app.py](streamlit_app.py), [data_loader.py](data_loader.py) y las dependencias declaradas en [pyproject.toml](../pyproject.toml).
+### Parámetros del escenario
 
-En Windows, abre PowerShell en la carpeta `repo_grupo_4`. Si está en otra ubicación, entra primero en ella, sustituyendo la ruta de ejemplo por la tuya:
+Los nuevos archivos no publican los parámetros ni la política de negativos. La app identifica los valores mostrados como parámetros del caso 4: 30 MWh diarios, límite de 7 MWh/h, desempate 08:00-17:00 y política de negativos aplicada en Silver. Los objetivos de energía y límite se declaran en el loader y se validan contra el horario. Si cambia el escenario de Gold, deberá actualizarse este contrato o publicarse su metadata.
 
-```powershell
-cd "C:\ruta\a\repo_grupo_4"
+Los precios proceden de REData; los consumos representan el escenario industrial del caso 4, no mediciones de una planta. Los costes incluyen energía a precio de mercado, sin peajes, cargos ni impuestos.
+
+## Ejecución posterior en EC2
+
+Las dependencias se declaran en [requirements.txt](../requirements.txt), incluidos `boto3`, `pyarrow` y `streamlit`.
+
+Cuando se autorice la ejecución, desde la raíz del repositorio y con el entorno virtual activado:
+
+```text
+python -m pip install -r requirements.txt
+python -m streamlit run app/streamlit_app.py --server.address 0.0.0.0 --server.port 8501
 ```
 
-La primera vez, crea un entorno virtual e instala las dependencias:
+No expongas el puerto 8501 a todo Internet. Restringe el acceso al origen autorizado o utiliza un túnel de Session Manager. La URL o el túnel dependerán de la configuración de la EC2.
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e .
+## Problemas habituales
+
+- **NoCredentialsError**: revisar que la instancia tenga un rol IAM utilizable o credenciales válidas en el entorno. Tener acceso por SSM no garantiza esto.
+- **AccessDenied**: revisar `s3:GetObject`, políticas del bucket y del endpoint y, si aplica, permisos de KMS.
+- **NoSuchKey o 404**: comprobar los dos nombres y el prefijo `outputs/redata/`.
+- **Error de conexión o timeout**: revisar la conectividad de la EC2 con S3 en `eu-north-1`.
+- **Faltan columnas o las tablas no coinciden**: utilizar los dos Parquet generados por la misma ejecución del script Gold.
+- **Resultados anteriores tras una subida**: pulsar **Actualizar datos de S3** cuando ambos objetos estén subidos.
+- **No hay resultados para un trimestre**: los archivos no contienen días válidos de ese trimestre; no significa ahorro cero.
+- **Error de horas incompletas o fuera de orden**: revisar que Gold publique el día completo en orden cronológico, conservando las dos horas repetidas de otoño.
+
+## Pruebas
+
+Desde la raíz del repositorio, con el entorno virtual activado:
+
+```text
+python -m unittest discover -s app\tests -v
 ```
 
-Después de configurar la ruta de los CSV, inicia la app desde esa misma carpeta:
-
-```powershell
-.\.venv\Scripts\python.exe -m streamlit run app/streamlit_app.py
-```
-
-Abre la URL que muestre la terminal, normalmente `http://localhost:8501`. Si ese puerto está ocupado:
-
-```powershell
-.\.venv\Scripts\python.exe -m streamlit run app/streamlit_app.py --server.port 8502
-```
-
-Para detener la app, pulsa `Ctrl+C` en la terminal. Para probar otros resultados, sustituye los dos CSV de la carpeta configurada y recarga la app. Si están en otra carpeta, actualiza `DEFAULT_DATA_DIR` y reinicia Streamlit.
-
-## Problemas Habituales
-
-- **No se pudieron cargar las tablas Gold**: comprueba la ruta configurada, los dos nombres exactos y que los archivos estén disponibles localmente, no solo en la nube.
-- **Faltan columnas o las tablas no coinciden**: utiliza los dos CSV finales de la misma ejecución, sin cambiar sus cabeceras ni sus valores.
-- **No hay resultados para un trimestre**: los archivos no contienen días válidos de ese trimestre; no es un error de conexión ni significa ahorro cero.
-
-El [contrato de datos 1.0](../docs/modelo_datos_y_contrato_streamlit.md) describe una futura integración S3/Parquet. Esta versión utiliza los dos CSV Gold locales y no implementa ese contrato de almacenamiento.
+Las pruebas generan tablas con las funciones reales de Gold, las serializan en Parquet en memoria y simulan S3. También ejecutan las tres pantallas mediante `streamlit.testing.v1.AppTest`, sin conectarse a AWS ni modificar Gold.

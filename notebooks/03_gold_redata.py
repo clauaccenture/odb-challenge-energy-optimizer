@@ -2,12 +2,18 @@
  
 Entrada : data/processed/redata/precios_horarios.json  (silver: precio spot por hora)
 Salida  : dos tablas en formato Parquet en data/outputs/redata/
-            gold_plan_horario.parquet     una fila por MES (12 filas) con: precio spot
+            gold_plan_mensual.parquet     una fila por MES (12 filas) con: precio spot
                                           medio mensual, ahorro estimado mensual, precio
                                           spot medio anual y ahorro estimado anual
-            gold_resumen_diario.parquet   una fila por dia local
+            gold_programacion_horaria.parquet
+                                          una fila por HORA: precio, MWh baseline y
+                                          optimizado, costes y la hora del dia (hora_local)
           y, si S3_BUCKET esta definido, se suben a s3://<bucket>/outputs/redata/.
-          Tipos de gold_resumen_diario: fecha_local es una fecha.
+          Tipos: fecha_local es una fecha y hora_local un entero (0-23). Las filas de la
+          programacion horaria van en orden cronologico; en el dia de 25 horas (octubre)
+          hora_local = 2 aparece dos veces (primero la de verano y despues la de invierno).
+          El resumen diario se calcula en memoria (alimenta la tabla mensual) pero no se
+          guarda en ningun archivo.
  
 Para cada dia LOCAL (Europe/Madrid, con 23, 24 o 25 horas reales):
     - Baseline:   2,5 MWh por hora de 08:00 a 20:00 (sin incluir la hora que empieza
@@ -36,7 +42,7 @@ import pandas as pd
 from dotenv import load_dotenv
  
 load_dotenv()
- 
+
 BUCKET = os.getenv("S3_BUCKET")
 SILVER = Path("data/processed/redata/precios_horarios.json")
 OUT_DIR = Path("data/outputs/redata")
@@ -143,10 +149,11 @@ def build_gold(silver: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     if not planes:
         raise ValueError("Ningun dia se ha podido optimizar: revisa el silver (dias incompletos)")
     plan = pd.concat(planes, ignore_index=True)
-    # datetime_utc se usa solo internamente (orden y desempate); no se incluye en la salida.
-    # datetime_local (con su desfase) sigue siendo unico por fila.
+    # datetime_utc y datetime_local se usan solo internamente (orden, desempate y para sacar
+    # hora_local); no se incluyen en la salida. Las filas conservan el orden cronologico.
+    plan["hora_local"] = plan["datetime_local"].dt.hour  # hora del dia (0-23) a la que se consume
     plan = plan[[
-        "datetime_local", "fecha_local", "precio_eur_mwh",
+        "fecha_local", "hora_local", "precio_eur_mwh",
         "consumo_baseline_mwh", "consumo_optimizado_mwh",
         "coste_baseline_eur", "coste_optimizado_eur",
     ]]
@@ -201,11 +208,11 @@ def main() -> None:
     plan, resumen = build_gold(load_silver(SILVER))
  
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    plan_path = OUT_DIR / "gold_plan_horario.parquet"
-    resumen_path = OUT_DIR / "gold_resumen_diario.parquet"
+    plan_path = OUT_DIR / "gold_plan_mensual.parquet"
     mensual = build_mensual(plan, resumen)
-    mensual.to_parquet(plan_path, index=False)  # gold_plan_horario: ahora tabla mensual
-    resumen.to_parquet(resumen_path, index=False)
+    mensual.to_parquet(plan_path, index=False)  # una fila por mes
+    programacion_path = OUT_DIR / "gold_programacion_horaria.parquet"
+    plan.to_parquet(programacion_path, index=False)  # una fila por hora, con hora_local
  
     ok = resumen[resumen["estado_optimizacion"] == "optimo"]
     print(f"Dias: {len(resumen)} (optimos: {len(ok)}) | horas en el plan: {len(plan)}")
@@ -214,10 +221,10 @@ def main() -> None:
         # se distorsiona con dias de precios casi 0, donde el % sale ~100 %)
         pct = 100 * ok["ahorro_eur"].sum() / ok["coste_baseline_total_eur"].sum()
         print(f"Ahorro total: {ok['ahorro_eur'].sum():.2f} EUR | ahorro ponderado: {pct:.2f} %")
-    print(f"Guardado {plan_path} y {resumen_path}")
+    print(f"Guardado {plan_path} y {programacion_path}")
     if BUCKET and not args.no_s3:
         upload_s3(plan_path)
-        upload_s3(resumen_path)
+        upload_s3(programacion_path)
  
  
 if __name__ == "__main__":
