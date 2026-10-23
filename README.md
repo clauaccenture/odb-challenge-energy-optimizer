@@ -363,7 +363,7 @@ python notebooks/04_analisis_temperatura_precio.py
 **Comprobación final.** Lista los resultados generados:
 
 ```bash
-ls data/outputs/ data/outputs/redata/
+ls -lh data/outputs/redata/ data/outputs/aemet/
 ```
 
 Para ejecutar el proyecto con **otro periodo**, basta con cambiar las fechas `--start` y `--end` de los pasos 1 y 2. Los valores esperados anteriores corresponden al periodo del 01/10/2025 al 30/09/2026.
