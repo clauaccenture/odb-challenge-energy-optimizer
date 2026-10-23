@@ -24,7 +24,7 @@ El objetivo no es reducir el consumo, sino mejorar la decisión de **cuándo con
 1. **Es posible ahorrar sin consumir menos:** desplazar la misma energía hacia horas de menor precio puede reducir el coste.
 2. **El ahorro varía entre días:** los precios presentan variabilidad tanto diaria como intradiaria.
 3. **Las horas más baratas no son necesariamente nocturnas:** la ventana óptima debe determinarse para cada día.
-4. **El mix de generación influye en el patrón de precios:** especialmente la generación solar y eólica.
+4. **El mix de generación influye en el patrón de precios:** especialmente la generación solar.
 
 ## 3. Fuentes
 
@@ -116,7 +116,7 @@ Esta decisión permite reducir el coste asociado a la carga flexible sin modific
 | Ahorro anual | 285.686,55€ |
 | Ahorro relativo | 54,90% |
 
-## 7.Limitaciones
+## 7. Limitaciones
 
 La solución actual representa una primera aproximación al problema de optimización de la carga flexible y presenta las siguientes limitaciones:
 
@@ -288,9 +288,9 @@ Los scripts están en `notebooks/` y **deben ejecutarse en este orden**, porque 
 | 4 | `02_calidad_aemet.py` | Limpia las temperaturas | `data/processed/aemet/` |
 | 5 | `03_gold_redata.py` | Calcula S0, S1 y el ahorro | `data/outputs/redata/` (`gold_plan_mensual.parquet` y `gold_programacion_horaria.parquet`) |
 | 6 | `03_gold_aemet.py` | Resume la temperatura nacional por día | `data/outputs/aemet/` (`gold_temperatura_diaria.parquet`) |
-| 7 | `04_analisis_temperatura_precio.py` | Cruza temperatura y precio | `data/outputs/` (tabla y gráfico) |
+| 7 | `04_analisis_temperatura_precio.py` | Cruza temperatura y precio | `data/outputs/aemet/` (analisis_temperatura_precio.parquet y gráfico del análisis) |
 
-Los comandos de este apartado incluyen `--no-s3`, que guarda todo solo en la carpeta local `data/`. Para subir también los resultados a S3, define `S3_BUCKET` en el `.env` (apartado 8.4) y **quita `--no-s3`** de cada comando.
+Los pasos 1 a 6 incluyen `--no-s3`, por lo que guardan los resultados únicamente en la carpeta local `data/`. Para subir también esos resultados a S3, define `S3_BUCKET` en el `.env` (apartado 8.4) y quita `--no-s3` de los comandos que admiten esta opción. El paso 7 se ejecuta sin `--no-s3`.
 
 **Paso 1. Ingesta de REData.** Tarda entre 10 y 15 minutos. Se lanza en segundo plano para que no se interrumpa si se cierra la sesión:
 
