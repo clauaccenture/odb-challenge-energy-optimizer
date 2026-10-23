@@ -10,15 +10,21 @@ estación del año, y otras variables (renovables, gas, demanda...) también
 mueven el precio.
 
 Salida:
-    data/outputs/analisis_temperatura_precio.parquet   (datos cruzados por día)
-    data/outputs/grafico_temperatura_precio.png        (gráfico para el cliente)
+    data/outputs/aemet/analisis_temperatura_precio.parquet   (datos cruzados por día)
+    data/outputs/aemet/grafico_temperatura_precio.png        (gráfico para el cliente, 300 dpi)
+    data/outputs/aemet/grafico_temperatura_precio.svg        (mismo gráfico en vectorial)
 
 Uso (desde la raíz del repo):
-    python notebooks/04_analisis_aemet_redata.py
-    python notebooks/04_analisis_aemet_redata.py --show   # además abre la ventana
+    python notebooks/04_analisis_temperatura_precio.py                     # todos los días disponibles
+    python notebooks/04_analisis_temperatura_precio.py --start 2025-10-01 --end 2026-09-30
+    python notebooks/04_analisis_temperatura_precio.py --start 2026-01-01  # desde una fecha en adelante
+    python notebooks/04_analisis_temperatura_precio.py --show              # además abre la ventana
+
+--start y --end son opcionales y se pueden usar por separado. Los dos extremos están incluidos.
 """
 
 import argparse
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -29,10 +35,10 @@ import matplotlib.pyplot as plt
 # RUTAS
 # --------------------------------------------------
 
-AEMET_PATH = Path("data/outputs/gold_temperatura_diaria.parquet")
-REDATA_PATH = Path("data/outputs/gold_plan_horario.parquet")
-OUTPUT_PATH = Path("data/outputs/analisis_temperatura_precio.parquet")
-FIGURE_PATH = Path("data/outputs/grafico_temperatura_precio.png")
+AEMET_PATH = Path("data/outputs/aemet/gold_temperatura_diaria.parquet")
+REDATA_PATH = Path("data/outputs/redata/gold_programacion_horaria.parquet")
+OUTPUT_PATH = Path("data/outputs/aemet/analisis_temperatura_precio.parquet")
+FIGURE_PATH = Path("data/outputs/aemet/grafico_temperatura_precio.png")
 
 
 # --------------------------------------------------
@@ -47,14 +53,19 @@ ESTACION_POR_MES = {
 }
 COLOR_ESTACION = {
     "Invierno": "#2b6cb0",
-    "Primavera": "#1cb764",
-    "Verano": "#e6f509",
-    "Otoño": "#e30707",
+    "Primavera": "#00ff77",
+    "Verano": "#ffd000",
+    "Otoño": "#ff5100",
 }
 
 # Tramos de temperatura para el gráfico de barras y la tabla resumen
 TRAMOS_BORDES = [float("-inf"), 10, 15, 20, 25, float("inf")]
 TRAMOS_NOMBRES = ["< 10 °C", "10-15 °C", "15-20 °C", "20-25 °C", "> 25 °C"]
+
+# Calidad y tamaño pensados para pegar el gráfico en una diapositiva
+DPI = 300                   # resolución del PNG (150 = borrador, 300 = presentación)
+FIGSIZE = (13, 6)           # pulgadas: casi el ancho de una diapositiva 16:9 (13,33)
+FUENTE_BASE = 12            # tamaño de letra base (se ve bien proyectado)
 
 ANCHO_TRAMO_TENDENCIA = 2   # °C por tramo para la línea de tendencia
 MIN_DIAS_TRAMO = 5          # un tramo con menos días no se dibuja en la tendencia
@@ -138,6 +149,34 @@ def merge_sources(aemet, redata):
 
 
 # --------------------------------------------------
+# FILTRO POR PERIODO
+# --------------------------------------------------
+
+def filter_period(df, start, end):
+    """Se queda con los días entre start y end (ambos incluidos). Cualquiera puede ser None."""
+
+    disponible_min, disponible_max = df["fecha"].min(), df["fecha"].max()
+
+    if start is not None and start < disponible_min:
+        print(f"AVISO: --start {start} es anterior al primer día cruzado ({disponible_min}).")
+    if end is not None and end > disponible_max:
+        print(f"AVISO: --end {end} es posterior al último día cruzado ({disponible_max}).")
+
+    if start is not None:
+        df = df[df["fecha"] >= start]
+    if end is not None:
+        df = df[df["fecha"] <= end]
+
+    if df.empty:
+        raise ValueError(
+            f"No hay días en el periodo pedido. Días disponibles tras el cruce: "
+            f"{disponible_min} -> {disponible_max}"
+        )
+
+    return df.reset_index(drop=True)
+
+
+# --------------------------------------------------
 # ANALISIS
 # --------------------------------------------------
 
@@ -180,20 +219,23 @@ def analyze(df):
 
 def plot_relationship(df, resumen):
 
-    anio_min = pd.to_datetime(df["fecha"]).dt.year.min()
-    anio_max = pd.to_datetime(df["fecha"]).dt.year.max()
-    periodo = str(anio_min) if anio_min == anio_max else f"{anio_min}-{anio_max}"
+    fechas = pd.to_datetime(df["fecha"])
+    periodo = f"{fechas.min():%d/%m/%Y} - {fechas.max():%d/%m/%Y}"
+
+    plt.rcParams.update({"font.size": FUENTE_BASE})
 
     fig, (ax1, ax2) = plt.subplots(
-        1, 2, figsize=(14, 5.8), gridspec_kw={"width_ratios": [3, 2]}
+        1, 2, figsize=FIGSIZE, gridspec_kw={"width_ratios": [3, 2]}
     )
 
     # ---------- Panel izquierdo: un punto por día, coloreado por estación ----------
     for estacion, color in COLOR_ESTACION.items():
         d = df[df["estacion"] == estacion]
+        if d.empty:
+            continue  # con un periodo corto, esa estación no aparece
         ax1.scatter(
             d["tmed"], d["precio_medio_eur_mwh"],
-            s=28, alpha=0.7, color=color, label=f"{estacion} ({len(d)} días)",
+            s=40, alpha=0.7, color=color, label=f"{estacion} ({len(d)} días)",
             edgecolors="none",
         )
 
@@ -213,12 +255,18 @@ def plot_relationship(df, resumen):
 
     ax1.set_xlabel("Temperatura media diaria (°C)")
     ax1.set_ylabel("Precio medio diario (EUR/MWh)")
-    ax1.set_title("Cada punto es un día", fontsize=11, loc="left")
-    ax1.legend(frameon=False, fontsize=9)
+    ax1.set_title("Cada punto es un día", fontsize=FUENTE_BASE + 2, loc="left")
+    # Hueco libre arriba para la leyenda: así nunca se superpone a los puntos
+    ax1.set_ylim(top=ax1.get_ylim()[1] * 1.3)
+    ax1.legend(loc="upper left", ncol=2, frameon=False, fontsize=FUENTE_BASE - 1)
     ax1.grid(alpha=0.25)
 
     # ---------- Panel derecho: precio medio por tramo de temperatura ----------
-    etiquetas = [f"{t}\n({int(n)} días)" for t, n in zip(resumen.index, resumen["dias"])]
+    resumen = resumen[resumen["dias"] > 0]  # sin tramos vacíos
+    etiquetas = [
+        f"{t}\n({int(n)} {'día' if n == 1 else 'días'})"
+        for t, n in zip(resumen.index, resumen["dias"])
+    ]
     barras = ax2.bar(
         etiquetas, resumen["precio_medio"],
         color="#4a5568", alpha=0.85,
@@ -227,12 +275,12 @@ def plot_relationship(df, resumen):
         if pd.notna(valor):
             ax2.text(
                 barra.get_x() + barra.get_width() / 2, valor + 1.5,
-                f"{valor:.0f}", ha="center", va="bottom", fontsize=10,
+                f"{valor:.0f}", ha="center", va="bottom", fontsize=FUENTE_BASE,
             )
     ax2.set_ylabel("Precio medio (EUR/MWh)")
-    ax2.set_title("Precio medio según la temperatura", fontsize=11, loc="left")
+    ax2.set_title("Precio medio según la temperatura", fontsize=FUENTE_BASE + 2, loc="left")
     ax2.grid(axis="y", alpha=0.25)
-    ax2.tick_params(axis="x", labelsize=9)
+    ax2.tick_params(axis="x", labelsize=FUENTE_BASE - 1)
 
     for ax in (ax1, ax2):
         ax.spines["top"].set_visible(False)
@@ -240,15 +288,15 @@ def plot_relationship(df, resumen):
 
     fig.suptitle(
         f"Temperatura media diaria y precio de la electricidad ({periodo})",
-        fontsize=14, fontweight="bold", x=0.01, ha="left",
+        fontsize=FUENTE_BASE + 6, fontweight="bold", x=0.01, ha="left",
     )
     fig.text(
         0.01, 0.01,
         "Fuentes: AEMET (temperatura media nacional) y REData (precio spot medio diario). "
         "Relación descriptiva, no causal: la temperatura coincide con la estación del año.",
-        fontsize=8.5, color="#4a5568", ha="left",
+        fontsize=FUENTE_BASE - 2, color="#4a5568", ha="left",
     )
-    fig.tight_layout(rect=(0, 0.03, 1, 0.95))
+    fig.tight_layout(rect=(0, 0.04, 1, 0.94))
 
     return fig
 
@@ -268,12 +316,18 @@ def save_analysis(df):
     print(f"\nGuardado análisis en: {OUTPUT_PATH}")
 
 
-def save_figure(fig):
+def save_figure(fig, dpi):
 
     FIGURE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIGURE_PATH, dpi=150)
 
-    print(f"Guardado gráfico en: {FIGURE_PATH}")
+    # PNG en alta resolución (fondo blanco, sin márgenes sobrantes)
+    fig.savefig(FIGURE_PATH, dpi=dpi, facecolor="white", bbox_inches="tight")
+
+    # SVG: vectorial, se ve nítido a cualquier tamaño (PowerPoint y Google Slides lo aceptan)
+    svg_path = FIGURE_PATH.with_suffix(".svg")
+    fig.savefig(svg_path, bbox_inches="tight")
+
+    print(f"Guardado gráfico en: {FIGURE_PATH} ({dpi} dpi) y {svg_path}")
 
 
 # --------------------------------------------------
@@ -283,8 +337,14 @@ def save_figure(fig):
 def main():
 
     ap = argparse.ArgumentParser()
+    ap.add_argument("--start", type=date.fromisoformat, help="primer día del análisis (YYYY-MM-DD)")
+    ap.add_argument("--end", type=date.fromisoformat, help="último día del análisis (YYYY-MM-DD)")
+    ap.add_argument("--dpi", type=int, default=DPI, help=f"resolución del PNG (por defecto {DPI})")
     ap.add_argument("--show", action="store_true", help="abrir también la ventana del gráfico")
     args = ap.parse_args()
+
+    if args.start and args.end and args.end < args.start:
+        raise ValueError("--end no puede ser anterior a --start")
 
     aemet, redata = load_data()
 
@@ -292,13 +352,16 @@ def main():
     redata = prepare_redata(redata)
 
     combinado = merge_sources(aemet, redata)
+    combinado = filter_period(combinado, args.start, args.end)
+
+    print(f"Periodo analizado: {combinado['fecha'].min()} -> {combinado['fecha'].max()}")
 
     _, resumen = analyze(combinado)
 
     save_analysis(combinado)
 
     fig = plot_relationship(combinado, resumen)
-    save_figure(fig)
+    save_figure(fig, args.dpi)
 
     if args.show:
         plt.show()
