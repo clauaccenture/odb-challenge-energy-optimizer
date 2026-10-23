@@ -1,6 +1,3 @@
-# odb-challenge-energy-optimizer
-Open Data Business Challenge - Energy Optimizer project (Case 4)
-
 #  Energy Optimizer
 
 > **No consumas menos. Consume en el momento adecuado.**
