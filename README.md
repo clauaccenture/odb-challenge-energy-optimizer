@@ -88,6 +88,8 @@ El dashboard consume exclusivamente `gold_plan_mensual.parquet` y `gold_programa
 
 La configuración, los permisos IAM necesarios y las instrucciones de ejecución se describen en [app/README.md](app/README.md). El acceso a la instancia mediante Session Manager no sustituye los permisos de lectura sobre S3.
 
+La ingesta REData informa `REDATA SIN DATOS PUBLICADOS` y termina correctamente cuando una respuesta válida no contiene precios spot para la fecha solicitada. No guarda archivos vacíos: conserva el histórico y permite continuar con las etapas posteriores y AEMET. No convierte errores HTTP, de red o respuestas inválidas en ausencia de novedades. Este comportamiento no programa reintentos posteriores: si faltan los precios de mañana a las 14:00, será necesario relanzar el pipeline más tarde para obtenerlos.
+
 ## 7. Actualización diaria AEMET
 
 El pipeline utiliza Python 3.11 en un entorno independiente de Streamlit (`.venv-pipeline` en EC2). Desde la raíz del repositorio:
