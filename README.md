@@ -28,7 +28,7 @@ El objetivo no es reducir el consumo, sino mejorar la decisión de **cuándo con
 | Fuente | Datos utilizados | Acceso | Fecha de descarga | Licencia / atribución |
 |---|---|---|---|---|
 | REData · Red Eléctrica | Hora, precio del mercado diario | API REST JSON sin token (`https://apidatos.ree.es/es/datos/mercados/precios-mercados-tiempo-real`) | 15/10/2026 | Red Eléctrica de España (REData) |
-| AEMET OpenData | Fecha, provincia, temperatura máxima, temperatura mínima, temperatura media, hora temperatura máxima, hora temperatura mínima | API REST con clave gratuita (`https://opendata.aemet.es`) | 18/10/2026 | Agencia Estatal de Meteorología (AEMET) |
+| AEMET OpenData | Fecha, provincia, temperatura máxima, mínima y media, hora temperatura máxima y mínima | API REST con clave gratuita (`https://opendata.aemet.es`) | 18/10/2026 | Agencia Estatal de Meteorología (AEMET) |
 
 ## 4. Calidad de datos
 
@@ -39,9 +39,9 @@ El objetivo no es reducir el consumo, sino mejorar la decisión de **cuándo con
 
 ### Decisiones de tratamiento
 
-- **Resolución temporal (REData):** el mercado diario opera en periodos de 15 minutos. Para el análisis, los precios se llevan a resolución horaria mediante la media de los valores cuartohorarios de cada hora.
-- **Precios negativos (REData):** como decisión metodológica del equipo, los precios negativos se sustituyen por cero para el cálculo, conservando el precio original en la capa Bronze para mantener la trazabilidad.
-- **Horas incompletas (REData):** se controla que cada hora disponga de sus cuatro observaciones cuartohorarias. En el periodo analizado (365 días desde el 01/10/2025) no se ha detectado ninguna hora incompleta. El proceso de calidad emite un aviso si una hora no tiene sus cuatro cuartos de hora, y el proceso Gold omite los días cuyo número de horas no sea 23, 24 o 25.
+- **Resolución temporal (REData):** el mercado diario opera en periodos de 15 minutos. Los precios se llevan a resolución horaria mediante la media de los valores cuartohorarios de cada hora.
+- **Precios negativos (REData):** como decisión del equipo, los precios negativos se sustituyen por cero para el cálculo, conservando el precio original en la capa Bronze.
+- **Horas incompletas (REData):** se controla que cada hora disponga de sus cuatro observaciones cuartohorarias. En el periodo analizado no se ha detectado ninguna hora incompleta. El proceso de calidad emite un aviso si una hora no tiene sus cuatro cuartos de hora, y el proceso Gold omite los días cuyo número de horas no sea 23, 24 o 25.
 - **Cambios de hora (REData):** los días de cambio horario tienen 23 o 25 horas (29/03/2026 y 26/10/2025) y se tratan sin asumir que todos los días tienen 24.
 - **Decimales (AEMET):** la API de AEMET devuelve los valores numéricos con coma decimal. En el tratamiento de la fuente se sustituyen las comas por puntos para poder convertirlos a número y evitar errores en el procesado.
 - **Provincias (AEMET):** se unifica el nombre de la provincia.
