@@ -333,7 +333,7 @@ Muestra un informe. Debe indicar `rows_read` 35040, `hours_output` 8760, `days_t
 python notebooks/02_calidad_aemet.py --no-s3
 ```
 
-Termina con la línea `Silver histórico completo: 299073 registros. Guardado data/processed/aemet/aemet_diario.json`.
+Termina con la línea `Silver histórico completo: 29**** registros. Guardado data/processed/aemet/aemet_diario.json`.
 
 **Paso 5. Gold de REData** (optimización diaria de S0 frente a S1):
 
