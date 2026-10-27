@@ -365,7 +365,15 @@ ls -lh data/outputs/redata/ data/outputs/aemet/
 
 Para ejecutar el proyecto con **otro periodo**, basta con cambiar las fechas `--start` y `--end` de los pasos 1 y 2. Los valores esperados anteriores corresponden al periodo del 01/10/2025 al 30/09/2026.
 
-**Acceso al frontend para la evaluación.** No es necesario repetir el pipeline para consultar los resultados ya publicados en S3. Se ha preparado un script de arranque en la EC2 y se entrega un `.bat` para abrir el túnel desde Windows. Se requiere acceso corporativo a la cuenta AWS del proyecto, permisos de Session Manager y de apertura del túnel, y AWS CLI 2.32.0 o posterior y Session Manager Plugin instalados en el PC.
+### 8.7. Dashboard Streamlit (opcional)
+
+El proyecto incluye un dashboard desarrollado con Streamlit. Es una capa de
+visualización y no es necesaria para ejecutar el pipeline ni para obtener los
+resultados del análisis. Lee las tablas Gold publicadas en S3; el bucket se
+define en `app/data_loader.py` y, si se usa otro, hay que editarlo allí.
+La configuración y ejecución en un entorno propio están en `app/README.md`.
+
+**Acceso al frontend para la evaluación:** No es necesario repetir el pipeline para consultar los resultados ya publicados en S3. Se ha preparado un script de arranque en la EC2 y se entrega un `.bat` para abrir el túnel desde Windows. Se requiere acceso corporativo a la cuenta AWS del proyecto, permisos de Session Manager y de apertura del túnel, y AWS CLI 2.32.0 o posterior y Session Manager Plugin instalados en el PC.
 
 1. En AWS, seleccionar **Estocolmo (`eu-north-1`)** y la instancia cuyo ID figura en el `.bat`. Si está detenida, iniciarla con los permisos correspondientes y esperar a que esté disponible en Session Manager.
 2. Abrir **Conectar → Session Manager** y, si Streamlit no está ya arrancado, ejecutar:
@@ -377,10 +385,6 @@ Para ejecutar el proyecto con **otro periodo**, basta con cambiar las fechas `--
 3. En Windows, ejecutar el `.bat` entregado, autorizar el inicio de sesión en la cuenta y rol del proyecto si se solicita y, cuando indique que el túnel está abierto, acceder a **http://localhost:18501**.
 
 Mantener abiertas la consola de Streamlit y la ventana del túnel. Al terminar, cerrar el túnel con `Ctrl+C` y detener Streamlit solo si nadie más lo utiliza. No es necesario abrir puertos a Internet, instalar Python en el PC ni actualizar el código de la instancia.
-
-### 8.7. Dashboard Streamlit (opcional)
-
-El proyecto incluye un dashboard desarrollado con Streamlit. Es una capa de visualización y no es necesaria para ejecutar el pipeline ni para obtener los resultados del análisis. El bucket que lee se define en `app/data_loader.py`; si se usa otro bucket, hay que editarlo allí. Las instrucciones de configuración y ejecución están en [app/README.md](app/README.md).
 
 ### 8.8. Uso de IA generativa
 
