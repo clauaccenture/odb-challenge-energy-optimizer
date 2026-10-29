@@ -1,6 +1,6 @@
 import importlib.util
 import json
-from datetime import date
+from datetime import date, timedelta
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -150,6 +150,75 @@ class DailyIngestionTests(unittest.TestCase):
                         with self.assertRaises(error_type):
                             aemet.fetch(date(2026, 10, 21), date(2026, 10, 21))
 
+    def run_range(self):
+        with patch("sys.argv", [
+            "ingesta", "--start", "2026-10-27", "--end", "2026-10-29",
+        ]):
+            aemet.main()
+        return json.loads((self.root / "last_ingestion.json").read_text(encoding="utf-8"))
+
+    def test_first_range_recovers_available_days_when_block_is_not_published(self):
+        def fetch(start, end):
+            if start != end or start == date(2026, 10, 29):
+                raise aemet.NoDataAvailable("Sin datos")
+            return [{"fecha": str(start)}]
+
+        with patch.object(aemet, "fetch", side_effect=fetch), patch.object(aemet, "upload_s3") as upload:
+            scope = self.run_range()
+        self.assertEqual(scope["status"], "completed")
+        self.assertEqual(scope["files"], [
+            f"aemet_2026-10-{day}_2026-10-{day}.json" for day in (27, 28)
+        ])
+        self.assertIn("Última fecha disponible: 2026-10-28", self.output.getvalue())
+        self.assertIn("SIN DATOS PUBLICADOS", self.output.getvalue())
+        self.assertFalse((self.root / "aemet_2026-10-29_2026-10-29.json").exists())
+        upload.assert_not_called()
+
+    def test_range_without_any_published_data_completes_without_empty_raw(self):
+        with patch.object(aemet, "fetch", side_effect=aemet.NoDataAvailable("Sin datos")):
+            scope = self.run_range()
+        self.assertEqual(scope["status"], "completed")
+        self.assertEqual(scope["files"], [])
+        self.assertEqual(list(self.root.glob("aemet_*.json")), [])
+        self.assertIn("AEMET SIN DATOS", self.output.getvalue())
+
+    def test_partial_api_response_recovers_missing_days_and_later_publications(self):
+        with patch.object(aemet, "fetch", side_effect=[
+            [{"fecha": "2026-10-27"}],
+            [{"fecha": "2026-10-28"}],
+            aemet.NoDataAvailable("Sin datos"),
+        ]) as download:
+            scope = self.run_range()
+        self.assertEqual(download.call_count, 3)
+        self.assertEqual(len(scope["files"]), 2)
+        with patch.object(aemet, "fetch", return_value=[{"fecha": "2026-10-29"}]) as download:
+            scope = self.run_range()
+        download.assert_called_once_with(date(2026, 10, 29), date(2026, 10, 29))
+        self.assertEqual(len(scope["files"]), 3)
+        self.assertIn("Última fecha disponible: 2026-10-29", self.output.getvalue())
+
+    def test_cached_partial_block_retries_missing_days_without_losing_original(self):
+        path = self.root / "aemet_2026-10-27_2026-10-29.json"
+        original = json.dumps([{"fecha": "2026-10-27"}])
+        path.write_text(original, encoding="utf-8")
+        with patch.object(aemet, "fetch", side_effect=[
+            [{"fecha": "2026-10-28"}], aemet.NoDataAvailable("Sin datos"),
+        ]) as download:
+            scope = self.run_range()
+        self.assertEqual(download.call_args_list, [
+            call(date(2026, 10, day), date(2026, 10, day)) for day in (28, 29)
+        ])
+        self.assertEqual(path.read_text(encoding="utf-8"), original)
+        self.assertEqual(len(scope["files"]), 2)
+
+    def test_range_does_not_hide_real_api_errors(self):
+        for error in (requests.Timeout("timeout"), requests.HTTPError("403"), ValueError("invalid")):
+            with self.subTest(error=type(error).__name__), patch.object(aemet, "fetch", side_effect=error):
+                with self.assertRaises(type(error)):
+                    self.run_range()
+                scope = json.loads((self.root / "last_ingestion.json").read_text(encoding="utf-8"))
+                self.assertEqual(scope["status"], "running")
+
     def test_daily_cli_and_historical_mode_are_separate(self):
         with patch("sys.argv", ["ingesta", "--daily", "--end", "2026-10-22", "--no-s3"]), \
                 patch.object(aemet, "ingest_daily") as daily:
@@ -157,7 +226,10 @@ class DailyIngestionTests(unittest.TestCase):
         daily.assert_called_once_with(date(2026, 10, 22), True)
         with patch("sys.argv", [
             "ingesta", "--start", "2026-10-01", "--end", "2026-10-21", "--no-s3",
-        ]), patch.object(aemet, "fetch", side_effect=lambda start, end: [{"fecha": str(start)}]) as download:
+        ]), patch.object(aemet, "fetch", side_effect=lambda start, end: [
+            {"fecha": str(start + timedelta(days=offset))}
+            for offset in range((end - start).days + 1)
+        ]) as download:
             aemet.main()
         self.assertEqual(download.call_args_list, [
             call(date(2026, 10, 1), date(2026, 10, 15)),

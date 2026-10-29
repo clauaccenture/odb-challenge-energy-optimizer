@@ -132,7 +132,164 @@ La solución actual representa una primera aproximación al problema de optimiza
 
 ## 8. Ejecución y uso de IA
 
-Estas instrucciones permiten ejecutar el proyecto de principio a fin en una instancia EC2 con acceso a un bucket S3. **Los comandos se copian y pegan de uno en uno**, esperando a que termine cada uno antes de lanzar el siguiente.
+En la rama **`feature_local`**, la descarga de JSON, las transformaciones, los Parquet y Streamlit se ejecutan **en el PC**, sin EC2, S3, credenciales AWS ni túneles. Solo hace falta Internet para descargar las fuentes públicas; una vez guardados los JSON, se pueden regenerar los resultados y consultar el dashboard sin conectarse a las API.
+
+### Preparación en Windows (PowerShell)
+
+Desde la raíz del repositorio, con Python 3.10 o superior:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+Copy-Item .env.example .env
+notepad .env
+```
+
+Si ya existe `.env`, **no lo sobrescribas**. Rellena únicamente `AEMET_API_KEY` con tu clave de [AEMET OpenData](https://opendata.aemet.es/centrodedescargas/inicio). No compartas ni versiones ese archivo. Las variables AWS no son necesarias.
+
+### Ejecutar todo con un comando
+
+```powershell
+.\.venv\Scripts\python.exe run_local.py
+```
+
+El comando:
+
+1. Descarga los JSON originales de REData y AEMET a `data\raw\`.
+2. Limpia los datos y guarda los JSON Silver en `data\processed\`.
+3. Genera los tres Parquet Gold en `data\outputs\`.
+4. Arranca Streamlit en **http://localhost:8501**, escuchando únicamente en `127.0.0.1`, con la telemetría de uso desactivada.
+
+El periodo por defecto es **01/10/2025–30/09/2026**. Para una prueba corta u otro periodo:
+
+```powershell
+.\.venv\Scripts\python.exe run_local.py --start 2026-03-10 --end 2026-03-12
+```
+
+La descarga anual de REData puede tardar 10–15 minutos. Los JSON ya existentes se reutilizan; AEMET reutiliza los bloques que coincidan exactamente con las fechas solicitadas y vuelve a consultar los días ausentes de los bloques parciales. Los scripts de ingesta admiten `--force` para volver a descargar los archivos existentes.
+
+**Ejecutar hasta hoy**, sin tener que cambiar la fecha cada día:
+
+```powershell
+.\.venv\Scripts\python.exe run_local.py --start 2026-01-01 --end (Get-Date -Format yyyy-MM-dd)
+```
+
+Si AEMET todavía no ha publicado los últimos días, **no se interrumpe el pipeline**. Si un bloque no tiene datos, se consulta día a día para recuperar los días disponibles; se avisa de las ausencias y se indica la última fecha obtenida del rango solicitado. Las respuestas parciales y el histórico raw se conservan. Al repetir el comando, se consultan de nuevo los días que faltan.
+
+Si no hay ningún dato AEMET publicado para el rango y tampoco hay histórico local, se generan Silver y Gold de temperaturas vacíos con un aviso explícito. Streamlit puede mostrar los resultados energéticos de REData e indicar que no hay temperaturas. Si existe histórico, se conserva y el panel usa la fecha más reciente disponible anterior o igual a la seleccionada, identificándola; no inventa temperaturas ni usa fechas posteriores.
+
+La ausencia confirmada de datos publicados no se confunde con un error real: clave inválida, límites de peticiones, fallos de red o respuestas malformadas siguen deteniendo la ejecución con error. También se requieren precios REData suficientes para generar la programación; no se inventan resultados si no existen.
+
+### Datos guardados
+
+| Capa | REData | AEMET |
+|---|---|---|
+| Bronze (JSON originales) | `data\raw\redata\` | `data\raw\aemet\` |
+| Silver (JSON limpios e informes) | `data\processed\redata\` | `data\processed\aemet\` |
+| Gold (Parquet) | `data\outputs\redata\gold_plan_mensual.parquet` y `gold_programacion_horaria.parquet` | `data\outputs\aemet\gold_temperatura_diaria.parquet` |
+
+`data\` se crea automáticamente y no se versiona. Las rutas se resuelven desde la ubicación del código, no desde la carpeta actual de la terminal. **Silver y Gold utilizan todo el histórico raw local**: `--start` y `--end` delimitan la descarga, no filtran los archivos guardados anteriormente. Los recuentos y ahorros de este README corresponden al año del caso, no a una prueba corta.
+
+### Reutilizar datos y arrancar por separado
+
+Generar los Parquet sin abrir Streamlit:
+
+```powershell
+.\.venv\Scripts\python.exe run_local.py --prepare-only
+```
+
+Regenerar desde los JSON existentes, sin descargar ni necesitar la clave AEMET:
+
+```powershell
+.\.venv\Scripts\python.exe run_local.py --skip-download
+```
+
+Se pueden combinar `--skip-download --prepare-only`. Para abrir únicamente el dashboard cuando los Parquet ya existen:
+
+```powershell
+.\.venv\Scripts\python.exe -m streamlit run app\streamlit_app.py --server.address 127.0.0.1 --server.port 8501 --browser.gatherUsageStats false
+```
+
+Detén la app con **Ctrl+C**. Tras regenerar Gold, pulsa **Actualizar datos locales**; ese botón relee los Parquet, no descarga nuevas fuentes. Si falta un Parquet o es inválido, la app informa del error, sin recurrir a S3 ni a datos de ejemplo. Consulta [la documentación del dashboard](app/README.md).
+
+### Ejecución manual y análisis opcional
+
+Todos los scripts de las etapas 01, 02 y 03 guardan en local **por defecto**, incluso si existe `S3_BUCKET`. `--no-s3` sigue siendo válido por compatibilidad. La subida antigua se conserva únicamente con la opción explícita `--s3` y un bucket configurado; `run_local.py` nunca la utiliza y Streamlit solo lee disco local.
+
+```powershell
+.\.venv\Scripts\python.exe notebooks\01_ingesta_redata.py --start 2025-10-01 --end 2026-09-30
+.\.venv\Scripts\python.exe notebooks\01_ingesta_aemet.py --start 2025-10-01 --end 2026-09-30
+.\.venv\Scripts\python.exe notebooks\02_calidad_redata.py
+.\.venv\Scripts\python.exe notebooks\02_calidad_aemet.py
+.\.venv\Scripts\python.exe notebooks\03_gold_redata.py
+.\.venv\Scripts\python.exe notebooks\03_gold_aemet.py
+.\.venv\Scripts\python.exe notebooks\04_analisis_temperatura_precio.py
+```
+
+El último paso es opcional, no lo necesita Streamlit y no se ejecuta en `run_local.py`. Guarda el cruce temperatura/precio y los gráficos en `data\outputs\aemet\`.
+
+### Pruebas automáticas
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s notebooks\tests -v
+.\.venv\Scripts\python.exe -m unittest discover -s app\tests -v
+```
+
+Las pruebas usan respuestas de API simuladas y archivos temporales, sin descargar el histórico real ni necesitar credenciales.
+
+### Distribución Windows sin instalar Python (PyInstaller)
+
+PyInstaller genera una carpeta portable con `EnergyOptimizer.exe`, Python y las dependencias incluidas. No es un instalador ni un único ejecutable independiente: hay que compartir **toda la carpeta `dist\EnergyOptimizer`**, incluida `_internal`. Está preparada para Windows de la misma arquitectura que el equipo de construcción; no para macOS o Linux. El usuario final no necesita Python ni ejecutar `pip`.
+
+Solo quien construye el paquete necesita el entorno Python:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-build.txt
+.\.venv\Scripts\python.exe build_windows.py
+```
+
+La configuración está en `energy_optimizer.spec`. Solo se incluyen código, dependencias y una plantilla de configuración: no se empaquetan `.env`, claves, datos descargados ni el entorno de desarrollo. El paquete contiene solo el pipeline necesario para el dashboard, no el análisis gráfico opcional del paso 04. La consola se mantiene visible para ver avances y errores.
+
+Para usarlo, copia o descomprime la carpeta completa en una ubicación donde puedas escribir (por ejemplo, Documentos). Desde esa carpeta:
+
+```powershell
+Copy-Item .env.example .env
+notepad .env
+.\EnergyOptimizer.exe --start 2026-01-01 --end 2026-10-29
+```
+
+No sobrescribas `.env` si ya existe. Configura `AEMET_API_KEY` antes de descargar. El ejecutable descarga los JSON, genera los Parquet y arranca Streamlit en **http://localhost:8501**, sin utilizar un Python instalado en el PC. También admite:
+
+```powershell
+.\EnergyOptimizer.exe --start 2026-01-01 --end (Get-Date -Format yyyy-MM-dd)
+.\EnergyOptimizer.exe --skip-download
+.\EnergyOptimizer.exe --skip-download --prepare-only
+```
+
+Los datos se guardan en `data\` **junto al ejecutable**, no dentro de `_internal` ni en una carpeta temporal. Para detener la ejecución usa Ctrl+C. El `.exe` aplica las mismas reglas de datos no publicados y validación que `run_local.py`.
+
+#### Entregar un ZIP con datos preparados, sin clave ni configuración
+
+Quien prepara la entrega descarga primero el periodo con su propia clave en el `.env` del proyecto:
+
+```powershell
+.\.venv\Scripts\python.exe run_local.py --start 2025-10-01 --end 2026-10-24 --prepare-only
+.\.venv\Scripts\python.exe build_windows.py
+.\.venv\Scripts\python.exe package_snapshot.py --start 2025-10-01 --end 2026-10-24
+```
+
+`package_snapshot.py` valida los Parquet y exige que ambas fuentes cubran exactamente los días solicitados. Si faltan días o el histórico contiene fechas fuera del periodo, se detiene en vez de entregar una cobertura incorrecta. Incluye el programa portable y los JSON, manifiestos y Parquet locales en `dist\EnergyOptimizer_2025-10-01_2026-10-24.zip`; no incluye el `.env` del proyecto. Comprueba además la integridad del ZIP.
+
+El destinatario solo debe descomprimir toda la carpeta y hacer doble clic en `Abrir_dashboard.cmd`. Este lanzador ejecuta `EnergyOptimizer.exe --dashboard-only`: no requiere clave AEMET, no llama a las API y no recalcula los datos. Abre Streamlit con los Parquet incluidos en http://localhost:8501. No hace falta instalar Python ni configurar nada. Se conserva la consola abierta mientras se usa la app; Ctrl+C la detiene.
+
+Para construir en otra carpeta sin sobrescribir una distribución anterior, utiliza `build_windows.py --dist-dir dist\snapshot-portable`. Al preparar el ZIP indica esa misma distribución con `package_snapshot.py --start 2025-10-01 --end 2026-10-24 --portable-dir dist\snapshot-portable\EnergyOptimizer`.
+
+Comparte una copia limpia del paquete antes de ejecutar descargas: si ya lo has usado, no distribuyas tu `.env` ni datos por accidente. El constructor se detiene si la carpeta de distribución contiene `.env` o `data`, para evitar borrarlos al reconstruir. Mueve esa distribución usada a otra carpeta y construye una nueva. No se firma digitalmente el ejecutable: puede requerir autorización corporativa; no eludas las políticas del equipo.
+
+<details>
+<summary>Referencia histórica del despliegue EC2/S3 (no aplica al flujo local)</summary>
+
+Los pasos siguientes documentan el despliegue anterior a `feature_local`. No son requisitos de esta rama. El dashboard actual ya no lee S3; para cargas opcionales a S3 se necesita ahora `--s3` explícito, no basta con definir un bucket ni con quitar `--no-s3`.
 
 ### 8.1. Requisitos previos
 
@@ -237,7 +394,7 @@ AWS_DEFAULT_REGION=<región_del_bucket>
 | Variable | Qué poner |
 |---|---|
 | `AEMET_API_KEY` | La clave de AEMET (apartado 8.1). |
-| `S3_BUCKET` | El nombre del bucket, solo el nombre (sin `s3://`). **Si está definido, los scripts suben a S3 todo lo que generan.** Usa un bucket propio para no sobrescribir datos de otros equipos. Para trabajar solo en local, déjalo vacío. |
+| `S3_BUCKET` | El nombre del bucket, solo el nombre (sin `s3://`). Solo se utiliza si se solicita `--s3` explícitamente. Usa un bucket propio para no sobrescribir datos de otros equipos. |
 | `AWS_DEFAULT_REGION` | La región del bucket, por ejemplo `eu-north-1`. |
 
 **Paso 4. Guardar y salir de `nano`:** pulsa `Ctrl+O`, luego Enter para confirmar el nombre, y por último `Ctrl+X`.
@@ -259,7 +416,7 @@ aws s3 ls s3://<nombre_de_tu_bucket_s3>/
 
 El primer comando muestra la identidad con la que trabaja la instancia (su rol IAM). El segundo lista el contenido del bucket; si está vacío no muestra nada, y si da `AccessDenied` el rol de la instancia no tiene permisos sobre ese bucket.
 
-**Ejecución solo en local.** Si se deja `S3_BUCKET` vacío, hay que añadir `--no-s3` al final de cada script del pipeline (apartado 8.6). Los resultados quedan entonces únicamente en la carpeta `data/` de la instancia.
+**Ejecución solo en local.** Es el comportamiento por defecto, sin necesidad de añadir `--no-s3`.
 
 ### 8.5. Organización de los datos
 
@@ -287,7 +444,7 @@ Los scripts están en `notebooks/` y **deben ejecutarse en este orden**, porque 
 | 6 | `03_gold_aemet.py` | Resume la temperatura nacional por día | `data/outputs/aemet/` (`gold_temperatura_diaria.parquet`) |
 | 7 | `04_analisis_temperatura_precio.py` | Cruza temperatura y precio | `data/outputs/aemet/` (analisis_temperatura_precio.parquet y gráfico del análisis) |
 
-Los pasos 1 a 6 incluyen `--no-s3`, por lo que guardan los resultados únicamente en la carpeta local `data/`. Para subir también esos resultados a S3, define `S3_BUCKET` en el `.env` (apartado 8.4) y quita `--no-s3` de los comandos que admiten esta opción. El paso 7 se ejecuta sin `--no-s3`.
+Los pasos 1 a 6 incluyen `--no-s3`, por lo que guardan los resultados únicamente en la carpeta local `data/`. Para subir también esos resultados a S3, define `S3_BUCKET` en el `.env` (apartado 8.4) y sustituye `--no-s3` por `--s3`. El paso 7 se ejecuta sin esas opciones.
 
 **Paso 1. Ingesta de REData.** Tarda entre 10 y 15 minutos. Se lanza en segundo plano para que no se interrumpa si se cierra la sesión:
 
@@ -380,7 +537,9 @@ Mantener abiertas la consola de Streamlit y la ventana del túnel. Al terminar, 
 
 ### 8.7. Dashboard Streamlit (opcional)
 
-El proyecto incluye un dashboard desarrollado con Streamlit. Es una capa de visualización y no es necesaria para ejecutar el pipeline ni para obtener los resultados del análisis. El bucket que lee se define en `app/data_loader.py`; si se usa otro bucket, hay que editarlo allí. Las instrucciones de configuración y ejecución están en [app/README.md](app/README.md).
+El proyecto incluye un dashboard desarrollado con Streamlit. En `feature_local` lee exclusivamente los Parquet locales. Las instrucciones vigentes están en [app/README.md](app/README.md).
+
+</details>
 
 ### 8.8. Uso de IA generativa
 

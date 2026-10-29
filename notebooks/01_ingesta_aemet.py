@@ -6,11 +6,14 @@ Descarga los datos climatológicos diarios desde AEMET OpenData.
 AEMET permite como máximo 15 días por petición, por lo que este
 script divide automáticamente el rango solicitado en bloques
 de máximo 15 días.
+Si un bloque no tiene datos publicados, consulta sus días por separado y omite
+solo los días sin datos. Las respuestas parciales se conservan y se consultan
+los días que faltan, también al reutilizar un archivo local.
 
 Los datos se guardan sin transformar en:
     data/raw/aemet/
 
-Si S3_BUCKET está definido y no se utiliza --no-s3,
+Solo si se utiliza --s3 y S3_BUCKET está definido,
 también se suben a:
     s3://<bucket>/raw/aemet/
 
@@ -23,7 +26,7 @@ Ejemplo local:
 Ejemplo con S3:
     python notebooks/01_ingesta_aemet.py \
         --start 2025-01-01 \
-        --end 2025-12-31
+        --end 2025-12-31 --s3
 
 Actualización diaria desde el histórico raw local:
     python notebooks/01_ingesta_aemet.py --daily --end 2026-10-22
@@ -32,6 +35,7 @@ Actualización diaria desde el histórico raw local:
 import os
 import json
 import argparse
+import sys
 
 from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
@@ -50,7 +54,8 @@ load_dotenv()
 API_KEY = os.getenv("AEMET_API_KEY")
 BUCKET = os.getenv("S3_BUCKET")
 
-RAW_DIR = Path("data/raw/aemet")
+PROJECT_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
+RAW_DIR = PROJECT_DIR / "data" / "raw" / "aemet"
 
 BASE_URL = (
     "https://opendata.aemet.es/opendata/api/"
@@ -342,6 +347,36 @@ def save_ingestion_scope(status: str, files: list[str]) -> None:
     temporary.replace(path)
 
 
+def available_blocks(start: date, end: date, force: bool):
+    """Conserva los raw originales y recupera los días publicados de un bloque."""
+    path = RAW_DIR / f"aemet_{start}_{end}.json"
+    records = None
+    if path.exists() and not force:
+        print(f"Ya existe {path.name}; se reutiliza.")
+        records = json.loads(path.read_text(encoding="utf-8"))
+        validate_records(records, start, end)
+    else:
+        try:
+            records = fetch(start, end)
+        except NoDataAvailable as error:
+            print(f"SIN DATOS PUBLICADOS: {error}")
+        else:
+            validate_records(records, start, end)
+            path = save_local(records, start, end)
+            save_manifest(path, start, end, len(records))
+
+    published = set()
+    if records is not None:
+        published = {date.fromisoformat(row["fecha"]) for row in records}
+        yield path, records
+    if start < end:
+        current = start
+        while current <= end:
+            if current not in published:
+                yield from available_blocks(current, current, force)
+            current += timedelta(days=1)
+
+
 def ingest_daily(target: date, no_s3: bool) -> None:
     save_ingestion_scope("running", [])
     latest = None
@@ -429,19 +464,29 @@ def main():
         help="Buscar días publicados desde --end hacia atrás hasta el histórico raw local."
     )
 
-    parser.add_argument(
+    storage = parser.add_mutually_exclusive_group()
+    storage.add_argument(
         "--no-s3",
+        dest="no_s3",
         action="store_true",
         help=(
-            "Guardar únicamente en local"
+            "Guardar únicamente en local (por defecto)"
         )
     )
+    storage.add_argument("--s3", dest="no_s3", action="store_false",
+                         help="Subir tambien a S3 (requiere S3_BUCKET).")
+    parser.set_defaults(no_s3=True)
+    parser.add_argument("--force", action="store_true", help="Descargar de nuevo los bloques existentes.")
 
     args = parser.parse_args()
+    if not args.no_s3 and not BUCKET:
+        parser.error("--s3 requiere S3_BUCKET.")
 
     if args.daily:
         if args.start is not None:
             parser.error("--daily no admite --start.")
+        if args.force:
+            parser.error("--force solo se utiliza en cargas con --start y --end.")
         ingest_daily(args.end, args.no_s3)
         return
     if args.start is None:
@@ -457,6 +502,7 @@ def main():
     total_bloques = 0
     total_registros = 0
     ingested_files = []
+    latest_available = None
     save_ingestion_scope("running", [])
 
     # Dividir automáticamente
@@ -475,46 +521,22 @@ def main():
 
         print("=" * 60)
 
-        # 1. Descargar bloque
-        datos = fetch(
-            chunk_start,
-            chunk_end
-        )
-
-        # 2. Guardar raw local
-        archivo = save_local(
-            datos,
-            chunk_start,
-            chunk_end
-        )
-
-        # 3. Actualizar manifest
-        save_manifest(
-            archivo,
-            chunk_start,
-            chunk_end,
-            len(datos)
-        )
-
-        # 4. Subir a S3 si corresponde
-        if not args.no_s3:
-
-            upload_s3(
-                archivo
-            )
-
-        else:
-
-            print(
-                "Subida a S3 desactivada "
-                "(--no-s3)."
-            )
-
-        total_bloques += 1
-        total_registros += len(datos)
-        ingested_files.append(archivo.name)
+        for archivo, datos in available_blocks(chunk_start, chunk_end, args.force):
+            if not args.no_s3:
+                upload_s3(archivo)
+            else:
+                print("Guardado unicamente en local.")
+            total_bloques += 1
+            total_registros += len(datos)
+            ingested_files.append(archivo.name)
+            latest = max(date.fromisoformat(row["fecha"]) for row in datos)
+            latest_available = latest if latest_available is None else max(latest_available, latest)
 
     save_ingestion_scope("completed", ingested_files)
+    if latest_available is None:
+        print("AEMET SIN DATOS publicados para el rango solicitado. Se conserva el histórico local.")
+    else:
+        print(f"Última fecha disponible: {latest_available}")
     # Resumen
     print("\n" + "=" * 60)
     print("INGESTA AEMET FINALIZADA")

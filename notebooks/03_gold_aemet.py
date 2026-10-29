@@ -3,7 +3,7 @@
 Entrada : data/processed/aemet/aemet_diario.json  (silver: una fila por estacion y dia)
 Salida  : una tabla en formato Parquet en data/outputs/
             gold_temperatura_diaria.parquet   una fila por dia
-          y, si S3_BUCKET esta definido, se sube a s3://<bucket>/outputs/.
+          y, solo con --s3 y S3_BUCKET definido, se sube a s3://<bucket>/outputs/aemet/.
           Tipos: fecha es una fecha (date), las temperaturas son decimales (float) y las
           horas son texto "HH:MM". Los datos que faltan son nulos, nunca 0.
 
@@ -18,6 +18,8 @@ Para cada dia, la tabla guarda justo lo que enseña el front end:
 
 Esta tabla no se cruza con los precios de REData: el front end consulta cada fuente
 por separado.
+Si el informe Silver confirma una ingesta sin datos publicados ni histórico,
+Gold conserva el contrato de columnas con cero filas y emite un aviso explícito.
 
 Notas:
   1. tmed nacional = media de las medias provinciales: primero se promedian las estaciones de
@@ -38,6 +40,7 @@ Uso (desde la raiz del repo):
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -46,8 +49,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BUCKET = os.getenv("S3_BUCKET")
-SILVER = Path("data/processed/aemet/aemet_diario.json")
-OUT_DIR = Path("data/outputs/aemet")
+PROJECT_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
+DATA_DIR = PROJECT_DIR / "data"
+SILVER = DATA_DIR / "processed" / "aemet" / "aemet_diario.json"
+OUT_DIR = DATA_DIR / "outputs" / "aemet"
 OUT_NAME = "gold_temperatura_diaria.parquet"
 DECIMALS = 1  # decimales con los que se enseña la temperatura
 
@@ -60,7 +65,12 @@ COLUMNAS = [
 
 def load_silver(path: Path) -> pd.DataFrame:
     """Lee el JSON silver (una fila por estacion y dia) con las temperaturas como numeros."""
-    df = pd.DataFrame(json.loads(path.read_text(encoding="utf-8")))
+    records = json.loads(path.read_text(encoding="utf-8"))
+    if records == []:
+        return pd.DataFrame(columns=[
+            "fecha", "provincia", "localidad", "tmax", "tmin", "tmed", "hora_tmax", "hora_tmin",
+        ])
+    df = pd.DataFrame(records)
     for col in ["tmax", "tmin", "tmed"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
@@ -140,8 +150,13 @@ def upload_s3(path: Path) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--no-s3", action="store_true", help="solo local")
+    storage = ap.add_mutually_exclusive_group()
+    storage.add_argument("--no-s3", dest="no_s3", action="store_true", help="solo local (por defecto)")
+    storage.add_argument("--s3", dest="no_s3", action="store_false", help="subir tambien a S3 (requiere S3_BUCKET)")
+    ap.set_defaults(no_s3=True)
     args = ap.parse_args()
+    if not args.no_s3 and not BUCKET:
+        ap.error("--s3 requiere S3_BUCKET.")
 
     if not SILVER.exists():
         raise FileNotFoundError(f"No existe {SILVER}. Ejecuta antes 02_calidad_aemet.py")
@@ -151,6 +166,11 @@ def main() -> None:
     if not report_path.exists():
         raise FileNotFoundError(f"No existe {report_path}. Ejecuta antes 02_calidad_aemet.py")
     report = json.loads(report_path.read_text(encoding="utf-8"))
+    if gold.empty:
+        if not (report.get("scope") == "last_ingestion" and report.get("ingested_files") == []
+                and report.get("rows_read") == 0 and report.get("rows_output") == 0):
+            raise ValueError("Silver AEMET vacío sin una ingesta completada sin datos publicados.")
+        print("AEMET SIN DATOS: se genera Gold vacío. Los resultados energéticos siguen disponibles.")
     if report.get("scope") == "last_ingestion":
         dates = report["ingested_dates"]
         if not isinstance(dates, list) or any(not isinstance(day, str) for day in dates):
@@ -162,7 +182,7 @@ def main() -> None:
         print("Avisos Gold AEMET del histórico completo.")
 
     # avisos (no se guardan en la tabla)
-    max_prov = max(n_prov.values())
+    max_prov = max(n_prov.values(), default=0)
     incompletos = [f for f, n in n_prov.items() if f in warning_dates and n < max_prov]
     if incompletos:
         print(f"  AVISO: {len(incompletos)} dias con menos de {max_prov} provincias: {incompletos}")

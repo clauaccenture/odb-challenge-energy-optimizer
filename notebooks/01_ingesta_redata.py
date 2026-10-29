@@ -1,14 +1,14 @@
 ﻿"""01 - Ingesta REData: precio del mercado diario -> capa raw (bronze).
  
 Descarga el JSON tal cual lo devuelve la API, UN FICHERO POR DIA, y lo guarda
-en data/raw/redata/ (cache local) y, si S3_BUCKET esta definido, en
+en data/raw/redata/ y, solo con --s3 y S3_BUCKET definido, en
 s3://<bucket>/raw/redata/. No se modifica nada del JSON original.
  
 Para el proyecto: 2025-10-01 -> 2026-09-30 = 365 ficheros
 (precios_2025-10-01_2025-10-01.json ... precios_2026-09-30_2026-09-30.json).
  
 Es reanudable: si un dia ya existe en data/raw/redata/ no se vuelve a descargar
-(solo se sube a S3 si hace falta). Usa --force para descargar de nuevo.
+Usa --force para descargar de nuevo.
 Si un dia falla tras los reintentos, se anota y se continua con el resto; al final
 se listan los dias fallidos y el script termina con error para poder relanzarlo.
 Una respuesta válida sin precios spot se informa como ausencia de novedades,
@@ -34,7 +34,8 @@ load_dotenv()
  
 BASE_URL = "https://apidatos.ree.es/es/datos/mercados/precios-mercados-tiempo-real"
 BUCKET = os.getenv("S3_BUCKET")
-RAW_DIR = Path("data/raw/redata")
+PROJECT_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
+RAW_DIR = PROJECT_DIR / "data" / "raw" / "redata"
 SPOT_TITLE = "Precio mercado spot"  # la serie que nos interesa (id 600)
 VALORES_ESPERADOS = (92, 96, 100)  # cuartos de hora: dia de 23 h, normal (24 h) y de 25 h
  
@@ -127,9 +128,16 @@ def main() -> None:
     ap.add_argument("--start", required=True, type=date.fromisoformat)
     ap.add_argument("--end", required=True, type=date.fromisoformat)
     ap.add_argument("--preview", action="store_true")
-    ap.add_argument("--no-s3", action="store_true", help="solo cache local")
+    storage = ap.add_mutually_exclusive_group()
+    storage.add_argument("--no-s3", dest="no_s3", action="store_true", help="solo local (por defecto)")
+    storage.add_argument("--s3", dest="no_s3", action="store_false", help="subir tambien a S3 (requiere S3_BUCKET)")
+    ap.set_defaults(no_s3=True)
     ap.add_argument("--force", action="store_true", help="descargar aunque el dia ya exista")
     args = ap.parse_args()
+    if args.end < args.start:
+        ap.error("--end no puede ser anterior a --start.")
+    if not args.no_s3 and not BUCKET:
+        ap.error("--s3 requiere S3_BUCKET.")
  
     subir = bool(BUCKET) and not args.no_s3
     descargados, omitidos, fallidos, avisos = 0, 0, [], []

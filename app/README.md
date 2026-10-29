@@ -1,59 +1,44 @@
 # Dashboard Streamlit
 
-La app lee exclusivamente las tablas Gold Parquet de REData y AEMET, desde estos objetos de S3:
+La app lee exclusivamente las tablas Gold Parquet de REData y AEMET desde el disco local:
 
 ```text
-s3://energy-optimizer-grupo4/outputs/redata/gold_plan_mensual.parquet
-s3://energy-optimizer-grupo4/outputs/redata/gold_programacion_horaria.parquet
-s3://energy-optimizer-grupo4/outputs/aemet/gold_temperatura_diaria.parquet
+data\outputs\redata\gold_plan_mensual.parquet
+data\outputs\redata\gold_programacion_horaria.parquet
+data\outputs\aemet\gold_temperatura_diaria.parquet
 ```
 
-La región es `eu-north-1`. El bucket, prefijo y región están definidos en [data_loader.py](data_loader.py). No se utilizan CSV locales ni hay una alternativa local si falla S3.
+Las rutas están definidas en [data_loader.py](data_loader.py) y se resuelven desde la raíz del repositorio, independientemente de dónde se lance la app. No se utilizan CSV como fuente ni hay conexión a S3, credenciales AWS o datos de ejemplo como alternativa.
 
 `gold_plan_mensual.parquet` contiene una fila por mes. Sus columnas son `mes`, `precio_spot_medio_mensual_eur_mwh`, `ahorro_estimado_mensual_eur`, `precio_spot_medio_anual_eur_mwh` y `ahorro_estimado_anual_eur`.
 
 `gold_programacion_horaria.parquet` contiene `fecha_local`, `hora_local`, `precio_eur_mwh`, `consumo_baseline_mwh`, `consumo_optimizado_mwh`, `coste_baseline_eur` y `coste_optimizado_eur`. Gold garantiza el orden cronológico de sus filas.
 
-Los antiguos `gold_plan_horario.parquet` y `gold_resumen_diario.parquet` no se leen, aunque sigan en S3: el proceso actual ya no los actualiza. Los totales diarios se obtienen sumando la programación publicada durante la carga cacheada, sin recalcular la optimización.
+Los antiguos `gold_plan_horario.parquet` y `gold_resumen_diario.parquet` no se leen: el proceso actual ya no los actualiza. Los totales diarios se obtienen sumando la programación publicada durante la carga cacheada, sin recalcular la optimización.
 
 La tabla AEMET sigue el contrato de [03_gold_aemet.py](../notebooks/03_gold_aemet.py): una fila por `fecha`, con `tmed`, `tmin`, `tmax` y `localidad_tmin`, `provincia_tmin`, `hora_tmin` (y sus equivalentes `_tmax`). Es un resumen **nacional**, no provincial: no permite un selector de provincia. La media diaria es la media de las medias provinciales, con el mismo peso para cada provincia. Los extremos publicados priorizan estaciones con hora disponible y las horas se muestran tal como las entrega AEMET, sin conversión de zona horaria.
 
-## Acceso desde EC2
+## Arranque local
 
-La conexión usa `boto3` y su cadena estándar de credenciales AWS. En EC2 se recomienda un rol IAM asociado a la instancia mediante un instance profile, sin claves en el código ni en el repositorio.
+Desde la raíz del repositorio, instala [las dependencias](../requirements.txt) y configura `AEMET_API_KEY` en `.env` según el [README principal](../README.md). Ejecuta:
 
-**Session Manager (SSM) permite acceder a la instancia, pero no concede por sí solo permisos para leer S3.** El rol de la EC2 debe permitir como mínimo:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": "s3:GetObject",
-      "Resource": [
-        "arn:aws:s3:::energy-optimizer-grupo4/outputs/redata/gold_plan_mensual.parquet",
-        "arn:aws:s3:::energy-optimizer-grupo4/outputs/redata/gold_programacion_horaria.parquet",
-        "arn:aws:s3:::energy-optimizer-grupo4/outputs/aemet/gold_temperatura_diaria.parquet"
-      ]
-    }
-  ]
-}
+```powershell
+.\.venv\Scripts\python.exe run_local.py
 ```
 
-No se necesita listar el bucket: se leen los objetos por su clave exacta. Si están cifrados con una clave KMS administrada por el cliente, también se necesita `kms:Decrypt` para esa clave y autorización en su política.
-
-La instancia necesita conectividad con S3, por ejemplo mediante salida HTTPS o un endpoint de VPC para S3. Las políticas del bucket y del endpoint también deben permitir la lectura.
+Se descargan los JSON, se generan los Parquet y se abre el servidor local. Visita **http://localhost:8501**. No hacen falta EC2, AWS CLI ni túneles. Si ya hay JSON locales, `run_local.py --skip-download` permite regenerar Gold y arrancar sin acceder a las API.
 
 ## Carga y actualización
 
-La app descarga los Parquet en memoria y mantiene los resultados validados en caché durante cinco minutos. Cambiar filtros o pantallas no vuelve a descargar los archivos mientras la caché siga vigente.
+La app lee los Parquet locales y mantiene los resultados validados en caché durante cinco minutos. Cambiar filtros o pantallas no vuelve a leer los archivos mientras la caché siga vigente.
 
-El botón **Actualizar datos de S3** invalida ambas cachés. REData se vuelve a cargar de inmediato y AEMET al mostrar la programación diaria. La expiración de la caché se comprueba en la siguiente ejecución de la app; no hay sondeo automático.
+El botón **Actualizar datos locales** invalida ambas cachés. REData se vuelve a cargar de inmediato y AEMET al mostrar la programación diaria. La expiración de la caché se comprueba en la siguiente ejecución de la app; no hay sondeo automático. El botón no descarga JSON ni ejecuta el pipeline.
 
-Los dos archivos deben proceder de la misma ejecución de Gold. Actualiza el dashboard solo cuando haya finalizado la subida de ambos: las dos lecturas de S3 no constituyen una transacción.
+Los dos archivos de REData deben proceder de la misma ejecución de Gold. Actualiza el dashboard solo cuando haya finalizado la generación de ambos: las dos lecturas locales no constituyen una transacción.
 
-No se descargan fuentes de REData, no se recalcula la optimización y no se escribe en S3. Si faltan credenciales, permisos, archivos o coherencia entre las tablas REData, la app muestra el error y detiene la carga. AEMET se carga por separado solo en la programación diaria y mantiene su propia caché de cinco minutos: un error muestra el detalle y el origen S3 dentro del panel de temperatura, sin bloquear los resultados energéticos.
+La app por sí sola no descarga fuentes ni recalcula la optimización. Si faltan permisos de lectura, archivos o coherencia entre las tablas REData, muestra el error y detiene la carga. AEMET se carga por separado solo en la programación diaria y mantiene su propia caché: un error muestra el detalle y la ruta local dentro del panel de temperatura, sin bloquear los resultados energéticos.
+
+El pipeline permite solicitar hasta hoy aunque AEMET todavía no haya publicado todos los días. Recupera los días disponibles y conserva el histórico. Si la primera ingesta no encuentra ninguna temperatura publicada, genera un Parquet AEMET vacío con el contrato completo y un aviso explícito; el panel indica que no hay temperaturas, sin bloquear REData. Una ingesta fallida por red, permisos o datos inválidos no se trata como ausencia de novedades.
 
 ## Pantallas y validaciones
 
@@ -81,27 +66,25 @@ Los nuevos archivos no publican los parámetros ni la política de negativos. La
 
 Los precios proceden de REData; los consumos representan el escenario industrial del caso 4, no mediciones de una planta. Los costes incluyen energía a precio de mercado, sin peajes, cargos ni impuestos.
 
-## Ejecución posterior en EC2
+## Abrir solo el dashboard
 
-Las dependencias se declaran en [requirements.txt](../requirements.txt), incluidos `boto3`, `pyarrow` y `streamlit`.
+Las dependencias se declaran en [requirements.txt](../requirements.txt). El dashboard utiliza `pyarrow` y `streamlit`, sin cliente AWS.
 
-Cuando se autorice la ejecución, desde la raíz del repositorio y con el entorno virtual activado:
+Cuando los Parquet ya estén generados, desde la raíz del repositorio:
 
-```text
-python -m pip install -r requirements.txt
-python -m streamlit run app/streamlit_app.py --server.address 0.0.0.0 --server.port 8501
+```powershell
+.\.venv\Scripts\python.exe -m streamlit run app\streamlit_app.py --server.address 127.0.0.1 --server.port 8501 --browser.gatherUsageStats false
 ```
 
-No expongas el puerto 8501 a todo Internet. Restringe el acceso al origen autorizado o utiliza un túnel de Session Manager. La URL o el túnel dependerán de la configuración de la EC2.
+Abre **http://localhost:8501** y conserva la terminal abierta. Detén Streamlit con **Ctrl+C**. La dirección `127.0.0.1` impide exponer el dashboard a otras máquinas.
 
 ## Problemas habituales
 
-- **NoCredentialsError**: revisar que la instancia tenga un rol IAM utilizable o credenciales válidas en el entorno. Tener acceso por SSM no garantiza esto.
-- **AccessDenied**: revisar `s3:GetObject`, políticas del bucket y del endpoint y, si aplica, permisos de KMS.
-- **NoSuchKey o 404**: comprobar los dos nombres y el prefijo `outputs/redata/`.
-- **Error de conexión o timeout**: revisar la conectividad de la EC2 con S3 en `eu-north-1`.
+- **No existe un Parquet**: ejecutar `run_local.py --prepare-only` o, si los JSON ya existen, `run_local.py --skip-download --prepare-only`.
+- **Permiso denegado**: revisar los permisos locales de los archivos.
+- **Error de descarga**: comprobar Internet y la clave AEMET. Solo el pipeline necesita acceso a las API.
 - **Faltan columnas o las tablas no coinciden**: utilizar los dos Parquet generados por la misma ejecución del script Gold.
-- **Resultados anteriores tras una subida**: pulsar **Actualizar datos de S3** cuando ambos objetos estén subidos.
+- **Resultados anteriores tras regenerar Gold**: pulsar **Actualizar datos locales** cuando el pipeline haya terminado.
 - **No hay resultados para un trimestre**: los archivos no contienen días válidos de ese trimestre; no significa ahorro cero.
 - **Error de horas incompletas o fuera de orden**: revisar que Gold publique el día completo en orden cronológico, conservando las dos horas repetidas de otoño.
 
@@ -113,4 +96,4 @@ Desde la raíz del repositorio, con el entorno virtual activado:
 python -m unittest discover -s app\tests -v
 ```
 
-Las pruebas generan tablas con las funciones reales de Gold, las serializan en Parquet en memoria y simulan S3. También ejecutan las tres pantallas mediante `streamlit.testing.v1.AppTest`, sin conectarse a AWS ni modificar Gold.
+Las pruebas generan tablas con las funciones reales de Gold y las guardan como Parquet en carpetas temporales. También ejecutan las tres pantallas mediante `streamlit.testing.v1.AppTest`, sin conectarse a AWS ni modificar los datos del proyecto.

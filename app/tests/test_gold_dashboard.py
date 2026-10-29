@@ -4,12 +4,12 @@ from io import BytesIO
 from pathlib import Path
 import runpy
 import sys
+from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pandas as pd
 import streamlit as st
-from botocore.exceptions import ClientError
 from streamlit.testing.v1 import AppTest
 
 APP_DIR = Path(__file__).resolve().parents[1]
@@ -52,6 +52,16 @@ class GoldDashboardTests(unittest.TestCase):
         ]))
 
     def setUp(self) -> None:
+        directory = TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.gold_dir = Path(directory.name) / "redata"
+        self.temperature_dir = Path(directory.name) / "aemet"
+        self.gold_dir.mkdir()
+        self.temperature_dir.mkdir()
+        for name, value in (("GOLD_DIR", self.gold_dir), ("TEMPERATURE_DIR", self.temperature_dir)):
+            patcher = patch.object(data_loader, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.monthly = self.monthly_source.copy(deep=True)
         self.summary = self.summary_source.copy(deep=True)
         self.plan = self.plan_source.copy(deep=True)
@@ -68,24 +78,9 @@ class GoldDashboardTests(unittest.TestCase):
             data_loader.HOURLY_FILENAME: self.plan,
         }
 
-        def get_object(*, Bucket: str, Key: str) -> dict[str, BytesIO]:
-            self.assertEqual(Bucket, data_loader.S3_BUCKET)
-            self.assertTrue(Key.startswith("outputs/redata/"))
-            buffer = BytesIO()
-            tables[Key.rsplit("/", 1)[-1]].to_parquet(buffer, index=False)
-            buffer.seek(0)
-            return {"Body": buffer}
-
-        client = Mock()
-        client.get_object.side_effect = get_object
-        with patch.object(data_loader.boto3, "client", return_value=client) as factory:
-            result = data_loader.load_gold_tables()
-        factory.assert_has_calls([
-            unittest.mock.call("s3", region_name="eu-north-1"),
-            unittest.mock.call("s3", region_name="eu-north-1"),
-        ])
-        self.assertEqual(client.get_object.call_count, 2)
-        return result
+        for filename, table in tables.items():
+            table.to_parquet(self.gold_dir / filename, index=False)
+        return data_loader.load_gold_tables()
 
     def run_app(self, tables: tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]) -> AppTest:
         with patch.object(data_loader, "load_gold_tables", return_value=tables):
@@ -190,12 +185,30 @@ class GoldDashboardTests(unittest.TestCase):
         self.assertNotIn(2, spring["hora_local"].tolist())
         self.assertFalse(plan["datetime_local"].duplicated().any())
 
-    def test_s3_error_is_not_replaced_with_local_data(self) -> None:
-        client = Mock()
-        client.get_object.side_effect = ClientError({"Error": {"Code": "AccessDenied"}}, "GetObject")
-        with patch.object(data_loader.boto3, "client", return_value=client):
-            with self.assertRaises(ClientError):
-                data_loader.load_gold_tables()
+    def test_missing_local_file_is_explicit(self) -> None:
+        with self.assertRaisesRegex(FileNotFoundError, "run_local.py"):
+            data_loader.load_gold_tables()
+
+    def test_app_reads_local_parquet_without_mocking_the_gold_loader(self) -> None:
+        self.load_tables()
+        app = AppTest.from_file(str(APP_DIR / "streamlit_app.py")).run(timeout=20)
+        self.assertEqual(list(app.exception), [])
+        self.assertFalse(app.error)
+        markup = "\n".join(item.value for item in app.markdown)
+        self.assertIn("PARQUET LOCAL", markup)
+        self.assertNotIn("S3", markup)
+        self.assertTrue(any(button.label == "Actualizar datos locales" for button in app.button))
+
+    def test_app_explains_how_to_generate_missing_local_parquet(self) -> None:
+        app = AppTest.from_file(str(APP_DIR / "streamlit_app.py")).run(timeout=20)
+        self.assertEqual(list(app.exception), [])
+        self.assertIn("run_local.py", app.error[0].value)
+        self.assertFalse(app.radio)
+
+    def test_corrupt_local_parquet_is_not_hidden(self) -> None:
+        (self.gold_dir / data_loader.MONTHLY_FILENAME).write_text("not parquet", encoding="utf-8")
+        with self.assertRaises(ValueError):
+            data_loader.load_gold_tables()
 
     def test_app_keeps_views_and_restores_hourly_table_and_download(self) -> None:
         tables = self.load_tables()
@@ -269,17 +282,8 @@ class GoldDashboardTests(unittest.TestCase):
                     self.load_tables()
 
     def read_temperature(self, table: pd.DataFrame) -> pd.DataFrame:
-        buffer = BytesIO()
-        table.to_parquet(buffer, index=False)
-        buffer.seek(0)
-        client = Mock()
-        client.get_object.return_value = {"Body": buffer}
-        with patch.object(data_loader.boto3, "client", return_value=client):
-            result = self.real_temperature_loader()
-        client.get_object.assert_called_once_with(
-            Bucket=data_loader.S3_BUCKET, Key="outputs/aemet/gold_temperatura_diaria.parquet",
-        )
-        return result
+        table.to_parquet(self.temperature_dir / data_loader.TEMPERATURE_FILENAME, index=False)
+        return self.real_temperature_loader()
 
     real_temperature_loader = staticmethod(data_loader.load_temperature_table)
 
@@ -291,6 +295,22 @@ class GoldDashboardTests(unittest.TestCase):
         self.assertEqual(table.loc[0, "provincia_tmax"], "SEVILLA")
         self.assertTrue(pd.isna(table.loc[1, "tmax"]))
         self.assertTrue(pd.isna(table.loc[1, "hora_tmin"]))
+
+    def test_empty_temperature_gold_is_readable_and_does_not_block_dashboard(self) -> None:
+        aemet = runpy.run_path(str(APP_DIR.parent / "notebooks" / "03_gold_aemet.py"))
+        silver = pd.DataFrame(columns=[
+            "fecha", "provincia", "localidad", "tmin", "tmax", "tmed", "hora_tmin", "hora_tmax",
+        ])
+        empty, _, _ = aemet["build_gold"](silver)
+        self.assertTrue(self.read_temperature(empty).empty)
+        self.temperature_loader.side_effect = self.real_temperature_loader
+        self.load_tables()
+        app = AppTest.from_file(str(APP_DIR / "streamlit_app.py")).run(timeout=20)
+        app.radio(key="view").set_value("Programación diaria").run()
+        self.assertEqual(list(app.exception), [])
+        self.assertFalse(app.error)
+        self.assertTrue(any("No hay datos de temperatura disponibles" in item.value for item in app.caption))
+        self.assertEqual(len(app.get("download_button")), 1)
 
     def test_rejects_invalid_temperature_data(self) -> None:
         for column, value in (
@@ -342,7 +362,7 @@ class GoldDashboardTests(unittest.TestCase):
         self.assertFalse(app.warning)
         self.assertEqual(list(app.exception), [])
         with patch.object(data_loader, "load_gold_tables", return_value=tables):
-            next(button for button in app.button if button.label == "Actualizar datos de S3").click().run()
+            next(button for button in app.button if button.label == "Actualizar datos locales").click().run()
         self.assertEqual(self.temperature_loader.call_count, 2)
 
     def test_temperature_fallback_uses_latest_prior_date_even_if_unsorted(self) -> None:
@@ -405,12 +425,12 @@ class GoldDashboardTests(unittest.TestCase):
                 self.assertFalse(app.warning)
                 self.assertEqual(len(app.get("download_button")), 1)
 
-    def test_temperature_s3_error_does_not_block_energy_results(self) -> None:
-        self.temperature_loader.side_effect = ClientError({"Error": {"Code": "AccessDenied"}}, "GetObject")
+    def test_temperature_local_error_does_not_block_energy_results(self) -> None:
+        self.temperature_loader.side_effect = FileNotFoundError("No existe el Parquet AEMET local")
         app = self.run_app(self.load_tables())
         app.radio(key="view").set_value("Programación diaria").run()
         self.assertEqual(list(app.exception), [])
-        self.assertIn("AccessDenied", app.error[0].value)
+        self.assertIn("No existe el Parquet AEMET local", app.error[0].value)
         self.assertEqual(len(app.get("download_button")), 1)
         self.assertIn("Regla de decisión", "\n".join(item.value for item in app.markdown))
 

@@ -1,4 +1,4 @@
-"""Energy Optimizer dashboard backed by Gold Parquet results in S3."""
+"""Energy Optimizer dashboard backed by local Gold Parquet results."""
 
 from __future__ import annotations
 
@@ -10,10 +10,9 @@ from textwrap import dedent
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from botocore.exceptions import BotoCoreError, ClientError
 from pyarrow import ArrowException
 
-from data_loader import GOLD_S3_URI, TEMPERATURE_S3_URI, load_gold_tables, load_temperature_table
+from data_loader import GOLD_DIR, TEMPERATURE_PATH, load_gold_tables, load_temperature_table
 
 
 st.set_page_config(
@@ -305,7 +304,7 @@ def render_summary(monthly: pd.DataFrame, daily: pd.DataFrame, saving: float) ->
         st.button("Ver programación diaria →", type="primary", on_click=open_daily_schedule, width="stretch")
 
 
-@st.cache_data(ttl=300, max_entries=1, show_spinner="Cargando temperaturas Gold desde S3...")
+@st.cache_data(ttl=300, max_entries=1, show_spinner="Cargando temperaturas Gold locales...")
 def cached_temperature_table() -> pd.DataFrame:
     return load_temperature_table()
 
@@ -315,9 +314,9 @@ def render_daily_temperature(selected_date: date) -> None:
         panel_heading("Temperatura diaria · España", "AEMET · resumen nacional")
         try:
             temperatures = cached_temperature_table()
-        except (BotoCoreError, ClientError, ArrowException, OSError, ValueError, KeyError) as error:
+        except (ArrowException, OSError, ValueError, KeyError) as error:
             st.error(f"No se pudieron cargar las temperaturas Gold: {error}")
-            st.caption(f"Origen S3: {TEMPERATURE_S3_URI}")
+            st.caption(f"Archivo local: {TEMPERATURE_PATH}")
             return
         has_temperature = temperatures[["tmin", "tmax", "tmed"]].notna().any(axis=1)
         available = temperatures.loc[(temperatures["fecha"] <= selected_date) & has_temperature]
@@ -463,7 +462,7 @@ def render_analysis(monthly: pd.DataFrame, period_saving: float) -> None:
         markup('<div role="list">' + "".join(rows) + '</div>')
 
 
-@st.cache_data(ttl=300, max_entries=1, show_spinner="Cargando tablas Gold desde S3...")
+@st.cache_data(ttl=300, max_entries=1, show_spinner="Cargando tablas Gold locales...")
 def cached_gold_tables() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     return load_gold_tables()
 
@@ -472,10 +471,10 @@ def main() -> None:
     apply_styles()
     try:
         monthly, summary, plan = cached_gold_tables()
-    except (BotoCoreError, ClientError, ArrowException, OSError, ValueError, KeyError) as error:
+    except (ArrowException, OSError, ValueError, KeyError) as error:
         st.error(f"No se pudieron cargar las tablas Gold: {error}")
-        st.caption(f"Origen S3: {GOLD_S3_URI}")
-        st.info("Comprueba las credenciales AWS de la EC2, los permisos s3:GetObject y la existencia de ambos Parquet.")
+        st.caption(f"Carpeta local: {GOLD_DIR}")
+        st.info("Ejecuta python run_local.py --prepare-only para descargar los JSON y generar los Parquet locales.")
         st.stop()
     with st.sidebar:
         markup("""
@@ -489,15 +488,15 @@ def main() -> None:
         selected_year = st.selectbox("Año de resultados", years, key="selected_year")
         st.divider()
         markup("""
-            <div class="source-box"><div class="source-title">Fuente de datos</div><div class="source-row"><span>REData · precios</span><span class="source-state">Gold S3</span></div></div>
+            <div class="source-box"><div class="source-title">Fuente de datos</div><div class="source-row"><span>REData · precios</span><span class="source-state">Gold local</span></div></div>
             <div class="sidebar-note">gold_plan_mensual.parquet<br>gold_programacion_horaria.parquet<br>Zona horaria: Europe/Madrid</div>
         """)
-        st.caption(f"Origen S3: {GOLD_S3_URI}")
-        if st.button("Actualizar datos de S3"):
+        st.caption(f"Carpeta local: {GOLD_DIR}")
+        if st.button("Actualizar datos locales"):
             cached_gold_tables.clear()
             cached_temperature_table.clear()
             st.rerun()
-        st.caption("Caché de datos: 5 minutos. Actualiza tras completar la subida de los Parquet de REData y AEMET.")
+        st.caption("Caché de datos: 5 minutos. Actualiza tras completar la generación de los Parquet locales de REData y AEMET.")
     single_year = monthly["month"].str[:4].nunique() == 1
     monthly = monthly[monthly["month"].str[:4] == str(selected_year)].copy()
     summary = summary[summary["fecha_local"].map(lambda value: value.year == selected_year)].copy()
@@ -511,7 +510,7 @@ def main() -> None:
         VIEWS[2]: "Ahorro acumulado y contribución mensual de la programación optimizada.",
     }
     markup(f"""
-        <div class="topline"><div class="crumb">Energía / <strong>Resultados</strong></div><div class="data-badge">TABLAS GOLD · PARQUET S3</div></div>
+        <div class="topline"><div class="crumb">Energía / <strong>Resultados</strong></div><div class="data-badge">TABLAS GOLD · PARQUET LOCAL</div></div>
         <header class="page-heading"><div><div class="eyebrow">Caso 4 · Carga flexible industrial</div><h1>{view}</h1><p class="heading-sub">{subtitles[view]}</p></div><div class="period-tag">{coverage}</div></header>
     """)
     st.info(f"Cobertura disponible: {len(daily)} días con programación de {calendar_days} días naturales entre las fechas cargadas; {calendar_days - len(summary)} sin programación publicada. Gold no publica el motivo de las fechas ausentes. Los totales no se anualizan ni representan necesariamente meses completos.")

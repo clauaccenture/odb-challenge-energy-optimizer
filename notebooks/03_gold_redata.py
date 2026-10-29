@@ -8,7 +8,7 @@ Salida  : dos tablas en formato Parquet en data/outputs/redata/
             gold_programacion_horaria.parquet
                                           una fila por HORA: precio, MWh baseline y
                                           optimizado, costes y la hora del dia (hora_local)
-          y, si S3_BUCKET esta definido, se suben a s3://<bucket>/outputs/redata/.
+          y, solo con --s3 y S3_BUCKET definido, se suben a s3://<bucket>/outputs/redata/.
           Tipos: fecha_local es una fecha y hora_local un entero (0-23). Las filas de la
           programacion horaria van en orden cronologico; en el dia de 25 horas (octubre)
           hora_local = 2 aparece dos veces (primero la de verano y despues la de invierno).
@@ -36,6 +36,7 @@ Uso (desde la raiz del repo):
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
  
 import pandas as pd
@@ -44,8 +45,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BUCKET = os.getenv("S3_BUCKET")
-SILVER = Path("data/processed/redata/precios_horarios.json")
-OUT_DIR = Path("data/outputs/redata")
+PROJECT_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
+DATA_DIR = PROJECT_DIR / "data"
+SILVER = DATA_DIR / "processed" / "redata" / "precios_horarios.json"
+OUT_DIR = DATA_DIR / "outputs" / "redata"
 SPOT_TITLE = "Precio mercado spot"
 TZ_LOCAL = "Europe/Madrid"
  
@@ -200,8 +203,13 @@ def upload_s3(path: Path) -> None:
  
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--no-s3", action="store_true", help="solo local")
+    storage = ap.add_mutually_exclusive_group()
+    storage.add_argument("--no-s3", dest="no_s3", action="store_true", help="solo local (por defecto)")
+    storage.add_argument("--s3", dest="no_s3", action="store_false", help="subir tambien a S3 (requiere S3_BUCKET)")
+    ap.set_defaults(no_s3=True)
     args = ap.parse_args()
+    if not args.no_s3 and not BUCKET:
+        ap.error("--s3 requiere S3_BUCKET.")
  
     if not SILVER.exists():
         raise FileNotFoundError(f"No existe {SILVER}. Ejecuta antes 02_calidad_redata.py")

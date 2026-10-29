@@ -35,10 +35,11 @@ import matplotlib.pyplot as plt
 # RUTAS
 # --------------------------------------------------
 
-AEMET_PATH = Path("data/outputs/aemet/gold_temperatura_diaria.parquet")
-REDATA_PATH = Path("data/outputs/redata/gold_programacion_horaria.parquet")
-OUTPUT_PATH = Path("data/outputs/aemet/analisis_temperatura_precio.parquet")
-FIGURE_PATH = Path("data/outputs/aemet/grafico_temperatura_precio.png")
+OUTPUT_DIR = Path(__file__).resolve().parents[1] / "data" / "outputs"
+AEMET_PATH = OUTPUT_DIR / "aemet" / "gold_temperatura_diaria.parquet"
+REDATA_PATH = OUTPUT_DIR / "redata" / "gold_programacion_horaria.parquet"
+OUTPUT_PATH = OUTPUT_DIR / "aemet" / "analisis_temperatura_precio.parquet"
+FIGURE_PATH = OUTPUT_DIR / "aemet" / "grafico_temperatura_precio.png"
 
 
 # --------------------------------------------------

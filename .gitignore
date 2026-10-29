@@ -31,6 +31,7 @@ MANIFEST
 #   before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+!energy_optimizer.spec
 
 # Installer logs
 pip-log.txt
@@ -151,6 +152,11 @@ activemq-data/
 
 # Environments
 .env
+.env.*
+!.env.example
+/env
+/env.txt
+/.env.txt
 .envrc
 .venv
 env/
@@ -220,4 +226,8 @@ __marimo__/
 .streamlit/secrets.toml
 
 data/
+*.zip
+*.parquet
+*.exe
 *.pem
+*.key

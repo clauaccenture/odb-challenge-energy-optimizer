@@ -111,6 +111,34 @@ class QualityScopeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "no ha finalizado"):
             self.run_quality()
 
+    def test_first_ingestion_without_published_data_generates_empty_gold(self):
+        (self.raw / self.old).unlink()
+        (self.raw / self.new).unlink()
+        self.scope([])
+        report = self.run_quality()
+        self.assertEqual(report["rows_read"], 0)
+        self.assertEqual(report["rows_output"], 0)
+        self.assertEqual(report["ingested_dates"], [])
+        self.assertEqual(json.loads((self.processed / "aemet_diario.json").read_text(encoding="utf-8")), [])
+        output = self.run_gold()
+        self.assertIn("AEMET SIN DATOS", output)
+        table = pd.read_parquet(self.root / "gold" / gold.OUT_NAME)
+        self.assertTrue(table.empty)
+        self.assertEqual(table.columns.tolist(), gold.COLUMNAS)
+
+    def test_missing_raw_without_completed_ingestion_is_still_an_error(self):
+        (self.raw / self.old).unlink()
+        (self.raw / self.new).unlink()
+        with self.assertRaises(FileNotFoundError):
+            self.run_quality()
+
+    def test_empty_gold_without_confirmed_no_data_report_is_an_error(self):
+        self.scope([self.old])
+        self.run_quality()
+        (self.processed / "aemet_diario.json").write_text("[]", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "Silver AEMET vacío"):
+            self.run_gold()
+
     def test_without_ingestion_record_explicitly_reports_history(self):
         report = self.run_quality()
         self.assertEqual(report["scope"], "historical")

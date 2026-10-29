@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
  
 import pandas as pd
@@ -10,8 +11,10 @@ from dotenv import load_dotenv
 load_dotenv()
  
 BUCKET = os.getenv("S3_BUCKET")
-RAW_DIR = Path("data/raw/redata")
-OUT_DIR = Path("data/processed/redata")
+PROJECT_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
+DATA_DIR = PROJECT_DIR / "data"
+RAW_DIR = DATA_DIR / "raw" / "redata"
+OUT_DIR = DATA_DIR / "processed" / "redata"
 SPOT_TITLE = "Precio mercado spot"
 TZ_LOCAL = "Europe/Madrid"
  
@@ -107,8 +110,13 @@ def upload_s3(path: Path) -> None:
  
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--no-s3", action="store_true", help="solo local")
+    storage = ap.add_mutually_exclusive_group()
+    storage.add_argument("--no-s3", dest="no_s3", action="store_true", help="solo local (por defecto)")
+    storage.add_argument("--s3", dest="no_s3", action="store_false", help="subir tambien a S3 (requiere S3_BUCKET)")
+    ap.set_defaults(no_s3=True)
     args = ap.parse_args()
+    if not args.no_s3 and not BUCKET:
+        ap.error("--s3 requiere S3_BUCKET.")
  
     print("Leyendo JSON raw...")
     quarters = load_spot(RAW_DIR)

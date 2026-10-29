@@ -20,11 +20,13 @@ Orden de la limpieza:
        si no hay temperatura, su hora tambien es nula
 
 Los valores que no existen se quedan como nulo (null en el JSON), nunca como 0.
+Si una ingesta completada confirma que no hay datos publicados ni histórico raw,
+se genera Silver vacío con un aviso. Una ingesta fallida o sin registro no se omite.
 
 Guarda:
     data/processed/aemet/aemet_diario.json     (una fila por estacion y dia)
     data/processed/aemet/calidad_aemet.json    (informe corto)
-y, si S3_BUCKET esta definido, los sube a s3://<bucket>/processed/aemet/.
+y, solo con --s3 y S3_BUCKET definido, los sube a s3://<bucket>/processed/aemet/.
 
 Uso (desde la raiz del repo):
     python notebooks/02_calidad_aemet.py
@@ -33,6 +35,7 @@ Uso (desde la raiz del repo):
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -42,8 +45,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BUCKET = os.getenv("S3_BUCKET")
-RAW_DIR = Path("data/raw/aemet")
-OUT_DIR = Path("data/processed/aemet")
+PROJECT_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
+DATA_DIR = PROJECT_DIR / "data"
+RAW_DIR = DATA_DIR / "raw" / "aemet"
+OUT_DIR = DATA_DIR / "processed" / "aemet"
 
 # columnas que se leen de bronze
 RAW_COLS = ["fecha", "indicativo", "nombre", "provincia", "tmax", "tmin", "tmed", "horatmax", "horatmin"]
@@ -211,15 +216,24 @@ def upload_s3(path: Path) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--no-s3", action="store_true", help="solo local")
+    storage = ap.add_mutually_exclusive_group()
+    storage.add_argument("--no-s3", dest="no_s3", action="store_true", help="solo local (por defecto)")
+    storage.add_argument("--s3", dest="no_s3", action="store_false", help="subir tambien a S3 (requiere S3_BUCKET)")
+    ap.set_defaults(no_s3=True)
     args = ap.parse_args()
+    if not args.no_s3 and not BUCKET:
+        ap.error("--s3 requiere S3_BUCKET.")
 
     print("Leyendo JSON raw...")
     filenames = latest_ingestion_files(RAW_DIR)
-    raw = load_aemet(RAW_DIR)
+    no_published_data = filenames == [] and not any(RAW_DIR.glob("aemet_*.json"))
+    raw = load_aemet(RAW_DIR, [] if no_published_data else None)
     df, historical_report = clean(raw)
-    if df.empty:
+    if df.empty and not no_published_data:
         raise ValueError("No hay temperaturas válidas para generar Silver AEMET.")
+    if no_published_data:
+        print("AEMET SIN DATOS: ingesta completada sin registros publicados ni histórico local. "
+              "Se genera Silver vacío, sin inventar temperaturas.")
     ingested = raw if filenames is None else load_aemet(RAW_DIR, filenames)
     if filenames is None:
         report = historical_report

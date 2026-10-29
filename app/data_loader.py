@@ -1,24 +1,22 @@
-"""Read and validate the Gold Parquet tables stored in S3."""
+"""Read and validate the Gold Parquet tables stored on local disk."""
 
 from __future__ import annotations
 
-from contextlib import closing
-from io import BytesIO
+from pathlib import Path
+import sys
 
-import boto3
 import numpy as np
 import pandas as pd
 
 
-S3_BUCKET = "energy-optimizer-grupo4"
-S3_PREFIX = "outputs/redata"
-S3_REGION = "eu-north-1"
-GOLD_S3_URI = f"s3://{S3_BUCKET}/{S3_PREFIX}/"
+PROJECT_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
+DATA_DIR = PROJECT_DIR / "data"
+GOLD_DIR = DATA_DIR / "outputs" / "redata"
 MONTHLY_FILENAME = "gold_plan_mensual.parquet"
 HOURLY_FILENAME = "gold_programacion_horaria.parquet"
-TEMPERATURE_PREFIX = "outputs/aemet"
+TEMPERATURE_DIR = DATA_DIR / "outputs" / "aemet"
 TEMPERATURE_FILENAME = "gold_temperatura_diaria.parquet"
-TEMPERATURE_S3_URI = f"s3://{S3_BUCKET}/{TEMPERATURE_PREFIX}/{TEMPERATURE_FILENAME}"
+TEMPERATURE_PATH = TEMPERATURE_DIR / TEMPERATURE_FILENAME
 TEMPERATURE_COLUMNS = [
 	"fecha", "tmed",
 	"tmin", "localidad_tmin", "provincia_tmin", "hora_tmin",
@@ -38,13 +36,11 @@ HOURLY_NUMERIC = [
 ]
 
 
-def read_table(filename: str, required: list[str], *, prefix: str = S3_PREFIX) -> pd.DataFrame:
-	response = boto3.client("s3", region_name=S3_REGION).get_object(
-		Bucket=S3_BUCKET,
-		Key=f"{prefix}/{filename}",
-	)
-	with closing(response["Body"]) as body:
-		table = pd.read_parquet(BytesIO(body.read()), engine="pyarrow")
+def read_table(filename: str, required: list[str], *, directory: Path | None = None) -> pd.DataFrame:
+	path = (GOLD_DIR if directory is None else directory) / filename
+	if not path.is_file():
+		raise FileNotFoundError(f"No existe {path}. Ejecuta primero run_local.py para generar las tablas Gold.")
+	table = pd.read_parquet(path, engine="pyarrow")
 	missing = set(required) - set(table.columns)
 	if missing:
 		raise ValueError(f"{filename}: faltan columnas: {', '.join(sorted(missing))}.")
@@ -60,7 +56,7 @@ def numeric_columns(table: pd.DataFrame, columns: list[str], name: str) -> None:
 
 def load_temperature_table() -> pd.DataFrame:
 	"""Read national daily temperatures, preserving missing measurements as nulls."""
-	table = read_table(TEMPERATURE_FILENAME, TEMPERATURE_COLUMNS, prefix=TEMPERATURE_PREFIX)
+	table = read_table(TEMPERATURE_FILENAME, TEMPERATURE_COLUMNS, directory=TEMPERATURE_DIR)
 	table["fecha"] = pd.to_datetime(table["fecha"], format="%Y-%m-%d", errors="raise").dt.date
 	if table["fecha"].isna().any() or table["fecha"].duplicated().any():
 		raise ValueError(f"{TEMPERATURE_FILENAME}: fechas vacías o duplicadas.")
