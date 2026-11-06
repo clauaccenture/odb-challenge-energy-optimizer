@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 load_dotenv()
  
 BUCKET = os.getenv("S3_BUCKET")
+# Carpeta de S3 (processed/<prefijo>/); permite separar variantes del calculo
+REDATA_S3_PREFIX = os.getenv("REDATA_S3_PREFIX", "redata").strip("/")
 RAW_DIR = Path("data/raw/redata")
 OUT_DIR = Path("data/processed/redata")
 SPOT_TITLE = "Precio mercado spot"
@@ -55,7 +57,7 @@ def hours_per_day(hourly: pd.DataFrame) -> dict:
  
  
 def clean_and_aggregate(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
-    """Nulos, duplicados, negativos -> 0 y media horaria. Devuelve (horas, informe)."""
+    """Nulos, duplicados y media horaria (negativos sin truncar). Devuelve (horas, informe)."""
     report = {"rows_read": int(len(df))}
  
     report["null_prices_found"] = int(df["price"].isna().sum())
@@ -68,9 +70,8 @@ def clean_and_aggregate(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     report["duplicate_quarters_removed"] = int(dup.sum())
     df = df[~dup].sort_values("datetime_utc")
  
-    # negativos -> 0 en cada cuarto de hora, ANTES de promediar
-    report["negative_prices_replaced_by_0"] = int((df["price"] < 0).sum())
-    df = df.assign(price=df["price"].clip(lower=0))
+    # los precios negativos son reales y se conservan; solo se cuentan
+    report["negative_prices_found"] = int((df["price"] < 0).sum())
  
     # hora UTC a la que pertenece cada cuarto (los desfases son horas enteras)
     df = df.assign(hour_utc=df["datetime_utc"].dt.floor("h"))
@@ -100,7 +101,7 @@ def to_bronze_like(hourly: pd.DataFrame) -> dict:
 def upload_s3(path: Path) -> None:
     import boto3  # acceso por rol IAM de la EC2, sin claves en el codigo
  
-    key = f"processed/redata/{path.name}"
+    key = f"processed/{REDATA_S3_PREFIX}/{path.name}"
     boto3.client("s3").upload_file(str(path), BUCKET, key)
     print(f"  subido a s3://{BUCKET}/{key}")
  

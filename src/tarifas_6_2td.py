@@ -15,6 +15,8 @@ from zoneinfo import ZoneInfo
 
 ZONA_PENINSULA = ZoneInfo("Europe/Madrid")
 PERIODOS = ("P1", "P2", "P3", "P4", "P5", "P6")
+# Año al que corresponden los peajes y cargos de este módulo.
+ANIO_TARIFAS = 2026
 
 PEAJES_ENERGIA_EUR_MWH = {
     "P1": 14.736,

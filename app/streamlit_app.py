@@ -398,7 +398,7 @@ def render_daily_schedule(schedule: pd.DataFrame, totals: pd.Series) -> None:
         with st.container(border=True):
             panel_heading("Regla de decisión", "Parámetros del caso 4 · aplicados por el proceso Gold")
             markup(f'<div class="formula">energía diaria = {format_number(totals["energia_flexible_objetivo_mwh"])} MWh<br>límite = {format_number(totals["limite_flexible_mwh_por_hora"])} MWh/h<br>priorizar precios más bajos<br>empates: 08:00–17:00 y hora más temprana</div>')
-            st.caption("Política del caso 4: precios negativos a cero antes de la media horaria (aplicada en Silver).")
+            st.caption("Política del caso 4: los precios negativos se conservan sin truncar (precio real de mercado).")
 
 
 def render_analysis(monthly: pd.DataFrame, period_saving: float) -> None:

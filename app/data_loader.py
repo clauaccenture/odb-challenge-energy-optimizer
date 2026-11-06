@@ -4,14 +4,18 @@ from __future__ import annotations
 
 from contextlib import closing
 from io import BytesIO
+import os
 
 import boto3
 import numpy as np
 import pandas as pd
+from dotenv import load_dotenv
 
+load_dotenv()
 
 S3_BUCKET = "energy-optimizer-grupo4"
-S3_PREFIX = "outputs/redata"
+# Same variable as notebooks 02/03; selects outputs/<prefix>/ (default outputs/redata).
+S3_PREFIX = f"outputs/{os.getenv('REDATA_S3_PREFIX', 'redata').strip('/')}"
 S3_REGION = "eu-north-1"
 GOLD_S3_URI = f"s3://{S3_BUCKET}/{S3_PREFIX}/"
 MONTHLY_FILENAME = "gold_plan_mensual.parquet"
