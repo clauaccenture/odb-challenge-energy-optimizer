@@ -87,11 +87,84 @@ class GoldDashboardTests(unittest.TestCase):
         self.assertEqual(client.get_object.call_count, 2)
         return result
 
-    def run_app(self, tables: tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]) -> AppTest:
+    def run_app(self, tables: tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame], mode: str = "market") -> AppTest:
         with patch.object(data_loader, "load_gold_tables", return_value=tables):
-            app = AppTest.from_file(str(APP_DIR / "streamlit_app.py")).run(timeout=20)
+            app = AppTest.from_file(str(APP_DIR / "streamlit_app.py"))
+            app.session_state["cost_mode"] = mode
+            app.run(timeout=20)
         self.assertEqual(list(app.exception), [])
         return app
+
+    def test_tariff_scenario_restricts_window_and_adds_regulated_costs(self) -> None:
+        monthly, summary, plan = self.load_tables()
+        t_monthly, t_summary, t_plan = data_loader.apply_tariff_scenario(monthly, summary, plan)
+        self.assertTrue(all(value.year == 2026 for value in t_summary["fecha_local"]))
+        self.assertNotIn(pd.Timestamp("2025-12-31").date(), set(t_plan["fecha_local"]))
+        self.assertNotIn("2025-12", t_monthly["month"].tolist())
+        for scenario in ("baseline", "optimizado"):
+            pd.testing.assert_series_equal(
+                t_summary[f"coste_{scenario}_total_eur"],
+                t_summary[f"coste_mercado_{scenario}_total_eur"] + t_summary[f"coste_regulado_{scenario}_total_eur"],
+                check_names=False,
+            )
+            pd.testing.assert_series_equal(t_plan[f"coste_{scenario}_eur"], t_plan[f"coste_total_{scenario}_eur"], check_names=False)
+        self.assertAlmostEqual(t_monthly["saving_eur"].sum(), t_summary["ahorro_eur"].sum(), places=4)
+        self.assertEqual(t_monthly["days"].sum(), len(t_summary))
+        self.assertEqual(t_monthly["ahorro_estimado_anual_eur"].nunique(), 1)
+        self.assertAlmostEqual(t_monthly["ahorro_estimado_anual_eur"].iloc[0], t_summary["ahorro_eur"].sum(), places=4)
+        # With zero market price the whole saving comes from tolls and charges and may be negative
+        # because S1 is not reoptimized with them.
+        day = t_summary.set_index("fecha_local").loc[pd.Timestamp("2026-01-02").date()]
+        self.assertAlmostEqual(
+            day["ahorro_eur"], day["coste_regulado_baseline_total_eur"] - day["coste_regulado_optimizado_total_eur"], places=4,
+        )
+        empty = data_loader.apply_tariff_scenario(monthly, summary, plan, start=pd.Timestamp("2027-01-01").date(),
+                                                  end=pd.Timestamp("2027-12-31").date())
+        self.assertTrue(all(table.empty for table in empty))
+
+    def test_rejects_inconsistent_tariff_columns(self) -> None:
+        source = self.plan_source
+        row = source.index[source["fecha_local"] == pd.Timestamp("2026-01-01").date()][0]
+        cases = {
+            "incompletos": ("peaje_energia_eur_mwh", None),
+            "fuera de P1-P6": ("periodo_tarifario", "P7"),
+            "coste regulado": ("coste_regulado_baseline_eur", source.loc[row, "coste_regulado_baseline_eur"] + 1),
+            "coste total": ("coste_total_optimizado_eur", source.loc[row, "coste_total_optimizado_eur"] + 1),
+        }
+        for message, (column, value) in cases.items():
+            with self.subTest(message=message):
+                st.cache_data.clear()
+                self.plan = source.copy(deep=True)
+                self.plan.loc[row, column] = value
+                with self.assertRaisesRegex(ValueError, message):
+                    self.load_tables()
+
+    def test_app_tariff_mode_shows_regulated_costs_and_disclaimer(self) -> None:
+        tables = self.load_tables()
+        app = self.run_app(tables, mode="tariff")
+        self.assertEqual(app.selectbox(key="selected_year").options, ["2026"])
+        markup = "\n".join(item.value for item in app.markdown)
+        self.assertIn("antes de IVA e IEE", markup)
+        _, t_summary, _ = data_loader.apply_tariff_scenario(*tables)
+        total = t_summary["ahorro_eur"].sum()
+        formatted = f"{total:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
+        self.assertIn(formatted + " €", markup)
+        app.radio(key="view").set_value("Programación diaria").run()
+        self.assertEqual(list(app.exception), [])
+        markup = "\n".join(item.value for item in app.markdown)
+        self.assertIn("<th>Periodo</th>", markup)
+        self.assertIn("+ peajes", markup)
+        self.assertIn("+ cargos", markup)
+        app.radio(key="view").set_value("Evolución del ahorro").run()
+        self.assertEqual(list(app.exception), [])
+
+    def test_app_tariff_mode_without_study_days_warns(self) -> None:
+        tables = tuple(table.copy() for table in self.load_tables())
+        for column in ("coste_regulado_baseline_total_eur", "coste_regulado_optimizado_total_eur"):
+            tables[1][column] = float("nan")
+        app = self.run_app(tables, mode="tariff")
+        self.assertIn("periodo de estudio", app.warning[0].value)
+        self.assertFalse(app.selectbox)
 
     def test_reads_real_gold_output_and_preserves_indicators(self) -> None:
         monthly, summary, plan = self.load_tables()
