@@ -16,14 +16,17 @@ también se suben a:
 
 Ejemplo local:
     python notebooks/01_ingesta_aemet.py \
-        --start 2025-01-01 \
-        --end 2025-12-31 \
+        --start 2024-10-01 \
+        --end 2026-09-30 \
         --no-s3
 
 Ejemplo con S3:
     python notebooks/01_ingesta_aemet.py \
-        --start 2025-01-01 \
-        --end 2025-12-31
+        --start 2024-10-01 \
+        --end 2026-09-30
+
+El año adicional permite calcular los retardos de temperatura `lag_1y`
+para el periodo objetivo 2025-10-01 -> 2026-09-30.
 
 Actualización diaria desde el histórico raw local:
     python notebooks/01_ingesta_aemet.py --daily --end 2026-10-22
@@ -32,6 +35,7 @@ Actualización diaria desde el histórico raw local:
 import os
 import json
 import argparse
+import time
 
 from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
@@ -97,6 +101,30 @@ class NoDataAvailable(RuntimeError):
     """La API confirma que no hay datos para el periodo solicitado."""
 
 
+def get_with_rate_limit(url: str, headers: dict | None = None):
+    for attempt in range(5):
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=60
+        )
+        if response.status_code != 429:
+            return response
+        if attempt == 4:
+            response.raise_for_status()
+        retry_after = response.headers.get("Retry-After")
+        try:
+            wait_seconds = max(5, int(float(retry_after))) if retry_after else 5 * (2 ** attempt)
+        except ValueError:
+            wait_seconds = 5 * (2 ** attempt)
+        print(
+            f"AEMET ha limitado la frecuencia (429); "
+            f"reintento en {wait_seconds}s."
+        )
+        time.sleep(wait_seconds)
+    raise RuntimeError("No se pudo completar la petición a AEMET.")
+
+
 def validate_records(datos, start: date, end: date) -> None:
     if not isinstance(datos, list) or not datos:
         raise ValueError("AEMET debe devolver una lista no vacía de registros.")
@@ -142,11 +170,7 @@ def fetch(start: date, end: date):
     )
 
     # Primera petición
-    response = requests.get(
-        url,
-        headers=headers,
-        timeout=60
-    )
+    response = get_with_rate_limit(url, headers)
 
     if response.status_code == 404:
         raise NoDataAvailable(f"AEMET sin datos para {start} -> {end}")
@@ -172,10 +196,7 @@ def fetch(start: date, end: date):
 
     # Segunda petición para obtener
     # los registros meteorológicos reales
-    response_datos = requests.get(
-        url_datos,
-        timeout=60
-    )
+    response_datos = get_with_rate_limit(url_datos)
 
     response_datos.raise_for_status()
 
@@ -474,6 +495,15 @@ def main():
         )
 
         print("=" * 60)
+
+        archivo_existente = RAW_DIR / (
+            f"aemet_{chunk_start}_{chunk_end}.json"
+        )
+        if archivo_existente.exists():
+            print(f"Bloque ya descargado; se omite: {archivo_existente.name}")
+            total_bloques += 1
+            ingested_files.append(archivo_existente.name)
+            continue
 
         # 1. Descargar bloque
         datos = fetch(
