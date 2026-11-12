@@ -1,0 +1,152 @@
+# Configuración del caso "desaladora" (referencia: TFM Univ. de Sevilla, 50.000 m3/dia, 66 kV).
+# Cada parámetro lleva: value, source_type (documented | derived | hypothesis) y nota.
+# Simulación académica: NO representa una planta, contrato ni factura reales.
+version_config: 1
+ 
+caso:
+  nombre:
+    value: "desaladora_tfm_sevilla"
+    source_type: documented
+  etiqueta_resultado:
+    value: "ahorro economico simulado antes de impuestos"
+    source_type: documented
+    nota: "Nunca llamarlo ahorro de factura."
+ 
+planta:
+  volumen_m3_dia:
+    value: 50000
+    source_type: documented
+    nota: "Ficha publica del TFM"
+  consumo_especifico_kwh_m3:
+    value: 3
+    source_type: hypothesis
+    nota: "Referencia sectorial, no medicion de la planta"
+  conexion_kv:
+    value: 66
+    source_type: documented
+  dias_operacion_ano:
+    value: 365
+    source_type: hypothesis
+    nota: "Plena produccion todo el año"
+ 
+carga_flexible:
+  energia_diaria_mwh:
+    value: 30
+    source_type: hypothesis
+    nota: "Definicion del caso (20 % del consumo estimado)"
+  limite_mwh_hora:
+    value: 7
+    source_type: hypothesis
+    nota: "Equivale a 7 MW medios; viabilidad depende de potencia contratada (no disponible)"
+ 
+baseline_s0:
+  mwh_hora:
+    value: 2.5
+    source_type: hypothesis
+  hora_inicio:
+    value: 8
+    source_type: hypothesis
+  hora_fin:
+    value: 20
+    source_type: hypothesis
+    nota: "Hasta las 20:00 sin incluir la hora que empieza a las 20:00"
+ 
+optimizacion_s1:
+  franja_preferente_inicio:
+    value: 8
+    source_type: hypothesis
+    nota: "Regla de desempate del equipo"
+  franja_preferente_fin:
+    value: 17
+    source_type: hypothesis
+  # Restricciones operativas: null = no se modela. Si alguna deja de ser null,
+  # el llenado de barato a caro ya no es optimo y hay que usar programacion lineal.
+  rampa_max_mwh_hora:
+    value: null
+    source_type: hypothesis
+  min_horas_encendido:
+    value: null
+    source_type: hypothesis
+  coste_arranque_eur:
+    value: null
+    source_type: hypothesis
+  deposito_agua_mwh_equivalente:
+    value: null
+    source_type: hypothesis
+ 
+mercado:
+  fuente:
+    value: "REData"
+    source_type: documented
+  serie:
+    value: "Precio mercado spot"
+    source_type: documented
+  zona_horaria:
+    value: "Europe/Madrid"
+    source_type: documented
+  politica_negativos:
+    value: "sin_truncar"
+    source_type: documented
+    nota: "Mismo termino que 03_gold. El spot negativo permanece negativo (no clip, no max(precio,0))"
+  fecha_inicio:
+    value: "2025-10-01"
+    source_type: documented
+  fecha_fin:
+    value: "2026-09-30"
+    source_type: documented
+ 
+# Los importes de peajes y cargos y el calendario P1-P6 NO estan aqui: viven en src/tarifas_6_2td.py
+# (fuente unica). Este bloque solo identifica la tarifa y debe coincidir con ese modulo.
+tarifa:
+  acceso:
+    value: "6.2TD"
+    source_type: hypothesis
+    nota: "66 kV encaja en 30-72,5 kV, pero no hay contrato que lo confirme"
+  zona:
+    value: "peninsula"
+    source_type: hypothesis
+  anio_regulatorio:
+    value: 2026
+    source_type: documented
+  segmento_cargos:
+    value: 4
+    source_type: documented
+    nota: "Para 6.2TD es el segmento 4, no el 5"
+ 
+componentes:
+  spot:
+    value: true
+    source_type: documented
+  peaje_energia:
+    value: true
+    source_type: documented
+  cargo_energia:
+    value: true
+    source_type: documented
+  perdidas:
+    value: false
+    source_type: hypothesis
+    nota: "Desactivado: depende del contrato (no existe)"
+  margen_comercial_eur_mwh:
+    value: 0
+    source_type: hypothesis
+    nota: "No modelado por falta de contrato (aqui encaja la formula de la comercializadora)"
+  desvios_eur_mwh:
+    value: 0
+    source_type: hypothesis
+    nota: "No modelado por falta de contrato"
+  otros_costes_eur_mwh:
+    value: 0
+    source_type: hypothesis
+    nota: "No modelado por falta de contrato"
+  iee:
+    value: false
+    source_type: hypothesis
+  iva:
+    value: false
+    source_type: hypothesis
+  potencia_y_excesos:
+    value: false
+    source_type: hypothesis
+    nota: "Fuera de alcance"
+ 
