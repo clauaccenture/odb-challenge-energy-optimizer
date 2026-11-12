@@ -8,3 +8,4 @@ pulp
 matplotlib
 plotly
 streamlit
+PyYAML

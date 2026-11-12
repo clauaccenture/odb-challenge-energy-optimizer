@@ -10,13 +10,16 @@ from textwrap import dedent
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import yaml
 from botocore.exceptions import BotoCoreError, ClientError
 from pyarrow import ArrowException
 
 from data_loader import (
-    GOLD_S3_URI, STUDY_END, STUDY_START, TEMPERATURE_S3_URI,
+    GOLD_S3_URI, TEMPERATURE_S3_URI,
     apply_tariff_scenario, load_gold_tables, load_temperature_table,
 )
+from desaladora_data import DESALADORA_S3_URI, load_desaladora_tables
+from desaladora_view import SOM_SCOPE, render_case, render_indexed_schedule
 
 
 st.set_page_config(
@@ -31,8 +34,9 @@ MONTH_NAMES = [
     "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
     "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
 ]
-VIEWS = ["Resumen ejecutivo", "Programación diaria", "Evolución del ahorro"]
+VIEWS = ["Resumen ejecutivo", "Programación diaria", "Evolución del ahorro", "Caso desaladora"]
 COST_MODES = {
+    "som": "Desaladora · Som Energia (simulado)",
     "tariff": "Mercado + peajes y cargos 6.2TD",
     "market": "Solo precio de mercado",
 }
@@ -48,6 +52,8 @@ def tariff_mode() -> bool:
 
 
 def scope_text() -> str:
+    if st.session_state.get("cost_mode") == "som":
+        return SOM_SCOPE
     return TARIFF_LABEL if tariff_mode() else MARKET_SCOPE
 
 
@@ -58,7 +64,7 @@ def render_hypotheses() -> None:
         st.markdown(f"""
 - **Instalación:** desaladora de 50.000 m³/día conectada a 66 kV; se **supone** peaje 6.2TD (30–72,5 kV).
 - **Contrato:** indexado; el precio de la energía es el de mercado (REData) más peajes y cargos repercutidos sin margen.
-- **Periodo de estudio:** {STUDY_START:%d/%m/%Y} – {STUDY_END:%d/%m/%Y}, con peajes y cargos de 2026.
+- **Periodo de estudio:** toda la cobertura publicada en S3 con peajes y cargos disponibles; sin corte fijo en octubre.
 - **Peajes de energía:** Resolución CNMC de 18/12/2025 (BOE-A-2025-26348). **Cargos:** Orden TED/1524/2025.
 - **Periodos P1–P6:** Circular 3/2020 de la CNMC, Península; sábados, domingos y festivos nacionales todo el día en P6.
 - **Precios negativos:** se conservan sin truncar; el coste de una hora puede ser negativo.
@@ -74,6 +80,8 @@ def format_number(value: float, decimals: int = 2) -> str:
 
 
 def format_eur(value: float) -> str:
+    if pd.isna(value):
+        return "Sin datos"
     return f"{format_number(value)} €"
 
 
@@ -281,7 +289,7 @@ def open_daily_schedule() -> None:
 def render_summary(monthly: pd.DataFrame, daily: pd.DataFrame, saving: float) -> None:
     cost_s0 = float(daily["coste_baseline_total_eur"].sum())
     cost_s1 = float(daily["coste_optimizado_total_eur"].sum())
-    saving_pct = saving / cost_s0 * 100 if cost_s0 else float("nan")
+    saving_pct = saving / cost_s0 * 100 if cost_s0 > 0 else float("nan")
     dates = daily["fecha_local"].tolist()
     metrics = st.columns(4)
     with metrics[0]:
@@ -322,7 +330,7 @@ def render_summary(monthly: pd.DataFrame, daily: pd.DataFrame, saving: float) ->
         markup(f'<div class="selected-month"><span>{month_label(selected)} · {int(selected_month["days"])} días</span><strong>{format_eur(selected_month["saving_eur"])}</strong></div>')
 
     with insight_column, st.container(border=True):
-        panel_heading("Lectura de negocio", ("Mercado + peajes y cargos 6.2TD" if tariff_mode() else "Precio de mercado") + " · resultados del período cargado")
+        panel_heading("Lectura de negocio", COST_MODES[st.session_state["cost_mode"]] + " · resultados del período cargado")
         scale = max(abs(cost_s0), abs(cost_s1), 1)
         markup(f"""
             <div class="insight-label">Reducción frente a S0</div>
@@ -460,10 +468,13 @@ def render_daily_schedule(schedule: pd.DataFrame, totals: pd.Series) -> None:
 
 
 def render_analysis(monthly: pd.DataFrame, period_saving: float) -> None:
+    monthly = monthly[monthly["days"] > 0].copy()
     note_column, filter_column = st.columns([2, 1])
     with note_column:
         markup('<p class="section-intro">Resultados Gold · agregados de los días válidos disponibles.'
                + (" Ahorro con peajes y cargos 6.2TD, antes de IVA e IEE." if tariff_mode() else "") + '</p>')
+        if st.session_state.get("cost_mode") == "som":
+            st.caption("Ahorro de la carga flexible reoptimizada con el precio indexado completo; simulación antes de impuestos.")
     with filter_column:
         periods = ["Todo el período disponible", "T1 · Enero–marzo", "T2 · Abril–junio", "T3 · Julio–septiembre", "T4 · Octubre–diciembre"]
         if st.session_state.get("analysis_period") not in periods:
@@ -527,15 +538,13 @@ def cached_gold_tables() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     return load_gold_tables()
 
 
+@st.cache_data(ttl=300, max_entries=1, show_spinner="Cargando ejecución desaladora desde S3...")
+def cached_desaladora_tables() -> tuple[dict, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    return load_desaladora_tables()
+
+
 def main() -> None:
     apply_styles()
-    try:
-        monthly, summary, plan = cached_gold_tables()
-    except (BotoCoreError, ClientError, ArrowException, OSError, ValueError, KeyError) as error:
-        st.error(f"No se pudieron cargar las tablas Gold: {error}")
-        st.caption(f"Origen S3: {GOLD_S3_URI}")
-        st.info("Comprueba las credenciales AWS de la EC2, los permisos s3:GetObject y la existencia de ambos Parquet.")
-        st.stop()
     with st.sidebar:
         markup("""
             <div class="brand"><div class="brand-mark">E</div><div><div class="brand-name">Energy Optimizer</div><div class="brand-sub">Open Data Challenge</div></div></div>
@@ -547,9 +556,35 @@ def main() -> None:
         st.segmented_control(
             "Cálculo del coste", list(COST_MODES), key="cost_mode", required=True,
             format_func=COST_MODES.get, width="stretch",
-            help=f"6.2TD: caso académico {STUDY_START:%d/%m/%Y}–{STUDY_END:%d/%m/%Y}, antes de IVA e IEE.",
+            disabled=view == VIEWS[3],
+            help="Som: S1 reoptimizado con el precio indexado completo. Los otros modos conservan el plan original optimizado por spot.",
         )
-        if tariff_mode():
+        if view == VIEWS[3]:
+            st.caption("Esta pantalla consulta siempre el caso Som Energia, independientemente del selector de coste.")
+        if st.button("Actualizar datos de S3"):
+            cached_gold_tables.clear()
+            cached_desaladora_tables.clear()
+            cached_temperature_table.clear()
+            st.rerun()
+        st.caption("Caché: 5 minutos. Actualiza después de publicar una ejecución completa.")
+    som = st.session_state.cost_mode == "som" or view == VIEWS[3]
+    source = DESALADORA_S3_URI if som else GOLD_S3_URI
+    metadata = None
+    try:
+        if som:
+            metadata, monthly, summary, plan = cached_desaladora_tables()
+        else:
+            monthly, summary, plan = cached_gold_tables()
+    except (BotoCoreError, ClientError, ArrowException, OSError, ValueError, KeyError, yaml.YAMLError) as error:
+        st.error(f"No se pudieron cargar las tablas Gold: {error}")
+        st.caption(f"Origen S3: {source}")
+        st.info("Comprueba el rol IAM y s3:GetObject. No se utilizan datos locales ni otro escenario como alternativa.")
+        if som:
+            st.code("python notebooks/03_gold_redata.py --config config/config_desaladora.yaml --s3", language="bash")
+            st.caption("Publica el caso desde EC2 antes de consultarlo. El dashboard no ejecuta el optimizador ni escribe en S3.")
+        st.stop()
+    with st.sidebar:
+        if tariff_mode() and not som:
             monthly, summary, plan = apply_tariff_scenario(monthly, summary, plan)
             if summary.empty:
                 st.warning("Gold no contiene días con peajes y cargos 6.2TD en el periodo de estudio.")
@@ -560,16 +595,14 @@ def main() -> None:
             st.session_state.selected_year = years[-1]
         selected_year = st.selectbox("Año de resultados", years, key="selected_year")
         st.divider()
-        markup("""
+        if som:
+            st.caption("Ejecución coherente: latest → metadata → Parquet verificados por SHA256.")
+        else:
+            markup("""
             <div class="source-box"><div class="source-title">Fuente de datos</div><div class="source-row"><span>REData · precios</span><span class="source-state">Gold S3</span></div></div>
             <div class="sidebar-note">gold_plan_mensual.parquet<br>gold_programacion_horaria.parquet<br>Zona horaria: Europe/Madrid</div>
         """)
-        st.caption(f"Origen S3: {GOLD_S3_URI}")
-        if st.button("Actualizar datos de S3"):
-            cached_gold_tables.clear()
-            cached_temperature_table.clear()
-            st.rerun()
-        st.caption("Caché de datos: 5 minutos. Actualiza tras completar la subida de los Parquet de REData y AEMET.")
+        st.caption(f"Origen S3: {source}")
     single_year = monthly["month"].str[:4].nunique() == 1
     monthly = monthly[monthly["month"].str[:4] == str(selected_year)].copy()
     summary = summary[summary["fecha_local"].map(lambda value: value.year == selected_year)].copy()
@@ -581,12 +614,20 @@ def main() -> None:
         VIEWS[0]: "Comparación de costes S0/S1 sobre el período disponible.",
         VIEWS[1]: "Precios y programación de carga flexible por intervalo horario local.",
         VIEWS[2]: "Ahorro acumulado y contribución mensual de la programación optimizada.",
+        VIEWS[3]: "Contrato de referencia, datos documentados, supuestos y límites de la simulación.",
     }
     markup(f"""
         <div class="topline"><div class="crumb">Energía / <strong>Resultados</strong></div><div class="data-badge">TABLAS GOLD · PARQUET S3</div></div>
         <header class="page-heading"><div><div class="eyebrow">Caso 4 · Carga flexible industrial</div><h1>{view}</h1><p class="heading-sub">{subtitles[view]}</p></div><div class="period-tag">{coverage}</div></header>
     """)
-    st.info(f"Cobertura disponible: {len(daily)} días con programación de {calendar_days} días naturales entre las fechas cargadas; {calendar_days - len(summary)} sin programación publicada. Gold no publica el motivo de las fechas ausentes. Los totales no se anualizan ni representan necesariamente meses completos.")
+    if som:
+        st.warning(SOM_SCOPE)
+        st.info(f"Cobertura disponible: {len(daily)} días con programación de {calendar_days} días naturales; {calendar_days - len(daily)} sin programación. Motivos disponibles en Caso desaladora. No se anualizan los totales.")
+    else:
+        st.info(f"Cobertura disponible: {len(daily)} días con programación de {calendar_days} días naturales entre las fechas cargadas; {calendar_days - len(summary)} sin programación publicada. Gold no publica el motivo de las fechas ausentes. Los totales no se anualizan ni representan necesariamente meses completos.")
+    if view == VIEWS[3] and metadata is not None:
+        render_case(metadata, summary)
+        return
     if daily.empty:
         st.warning("No hay días con programación válida en el año seleccionado.")
         st.dataframe(summary, hide_index=True, width="stretch")
@@ -605,10 +646,15 @@ def main() -> None:
         selected_date = render_date_picker(dates)
         schedule = plan[plan["fecha_local"] == selected_date]
         totals = daily.loc[daily["fecha_local"] == selected_date].iloc[0]
-        render_daily_schedule(schedule, totals)
+        if som:
+            render_indexed_schedule(schedule)
+            st.metric("Ahorro simulado del día · carga flexible", format_eur(totals["ahorro_eur"]))
+            render_daily_temperature(selected_date)
+        else:
+            render_daily_schedule(schedule, totals)
     else:
         render_analysis(monthly, period_saving)
-    footer = (
+    footer = SOM_SCOPE if som else (
         "<strong>Mercado + peajes y cargos 6.2TD.</strong> Antes de IVA e IEE · simulación académica, no factura real."
         if tariff_mode() else "<strong>Coste de energía a precio de mercado.</strong> Sin peajes, cargos ni impuestos."
     )

@@ -63,3 +63,26 @@ def test_restriccion_operativa_activa_exige_programacion_lineal(cargado):
     d = derivados(cfg)
     assert d["requiere_programacion_lineal"] is True
     assert d["restricciones_operativas_activas"] == ["rampa_max_mwh_hora"]
+
+
+@pytest.mark.parametrize("ruta,valor", [
+    (("contrato", "perdidas_fraccion"), -0.01),
+    (("contrato", "sc_eur_mwh"), float("nan")),
+    (("carga_flexible", "limite_mwh_hora"), 0),
+    (("baseline_s0", "hora_fin"), 25),
+    (("mercado", "fecha_inicio"), "2025-12-31"),
+    (("componentes", "iva"), True),
+    (("optimizacion_s1", "rampa_max_mwh_hora"), 3),
+    (("operacion_demo", "potencia_contratada_mw", "p2"), 1),
+])
+def test_caso_rechaza_parametros_invalidos_o_no_soportados(cargado, ruta, valor):
+    import copy
+    from src.desaladora import validar_config
+
+    cfg = copy.deepcopy(cargado[0])
+    nodo = cfg
+    for clave in ruta[:-1]:
+        nodo = nodo[clave]
+    nodo[ruta[-1]] = valor
+    with pytest.raises(ValueError):
+        validar_config(cfg)
