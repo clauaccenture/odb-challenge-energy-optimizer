@@ -13,7 +13,10 @@ import streamlit as st
 from botocore.exceptions import BotoCoreError, ClientError
 from pyarrow import ArrowException
 
-from data_loader import GOLD_S3_URI, TEMPERATURE_S3_URI, load_gold_tables, load_temperature_table
+from data_loader import (
+    GOLD_S3_URI, STUDY_END, STUDY_START, TEMPERATURE_S3_URI,
+    apply_tariff_scenario, load_gold_tables, load_temperature_table,
+)
 
 
 st.set_page_config(
@@ -29,6 +32,41 @@ MONTH_NAMES = [
     "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
 ]
 VIEWS = ["Resumen ejecutivo", "Programación diaria", "Evolución del ahorro"]
+COST_MODES = {
+    "tariff": "Mercado + peajes y cargos 6.2TD",
+    "market": "Solo precio de mercado",
+}
+TARIFF_LABEL = (
+    "Ahorro estimado de la carga flexible del periodo seleccionado, con peajes y cargos 6.2TD "
+    "incluidos; antes de IVA e IEE. Simulación académica, no ahorro real verificado en factura."
+)
+MARKET_SCOPE = "El coste incluye solo energía a precio de mercado: no incluye peajes, cargos ni impuestos."
+
+
+def tariff_mode() -> bool:
+    return st.session_state.get("cost_mode", "tariff") == "tariff"
+
+
+def scope_text() -> str:
+    return TARIFF_LABEL if tariff_mode() else MARKET_SCOPE
+
+
+def render_hypotheses() -> None:
+    if not tariff_mode():
+        return
+    with st.expander("Hipótesis del caso académico 6.2TD", icon=":material/info:"):
+        st.markdown(f"""
+- **Instalación:** desaladora de 50.000 m³/día conectada a 66 kV; se **supone** peaje 6.2TD (30–72,5 kV).
+- **Contrato:** indexado; el precio de la energía es el de mercado (REData) más peajes y cargos repercutidos sin margen.
+- **Periodo de estudio:** {STUDY_START:%d/%m/%Y} – {STUDY_END:%d/%m/%Y}, con peajes y cargos de 2026.
+- **Peajes de energía:** Resolución CNMC de 18/12/2025 (BOE-A-2025-26348). **Cargos:** Orden TED/1524/2025.
+- **Periodos P1–P6:** Circular 3/2020 de la CNMC, Península; sábados, domingos y festivos nacionales todo el día en P6.
+- **Precios negativos:** se conservan sin truncar; el coste de una hora puede ser negativo.
+- **Plan S1:** el mismo que con solo precio de mercado (no se reoptimiza con peajes); con peajes el ahorro podría ser mayor.
+- **Potencia:** el término de potencia es igual en S0 y S1 y no cambia el ahorro. Mover hasta 7 MWh/h está sujeto a no
+  superar la potencia contratada junto con la carga no flexible; los excesos de potencia **no se calculan**.
+- **Fuera del cálculo:** pérdidas, servicios de ajuste, margen de comercialización, IEE e IVA.
+""")
 
 
 def format_number(value: float, decimals: int = 2) -> str:
@@ -254,6 +292,8 @@ def render_summary(monthly: pd.DataFrame, daily: pd.DataFrame, saving: float) ->
         kpi("Ahorro del período", format_eur(saving), "S0 − S1 · días con estado óptimo", True, "EUR")
     with metrics[3]:
         kpi("Ahorro sobre S0", format_pct(saving_pct), "Ahorro total / coste S0 total", True, "PORCENTAJE")
+    if tariff_mode():
+        markup(f'<div class="notice">{escape(TARIFF_LABEL)}</div>')
 
     chart_column, insight_column = st.columns([1.75, .92])
     with chart_column, st.container(border=True):
@@ -282,7 +322,7 @@ def render_summary(monthly: pd.DataFrame, daily: pd.DataFrame, saving: float) ->
         markup(f'<div class="selected-month"><span>{month_label(selected)} · {int(selected_month["days"])} días</span><strong>{format_eur(selected_month["saving_eur"])}</strong></div>')
 
     with insight_column, st.container(border=True):
-        panel_heading("Lectura de negocio", "Precio de mercado · resultados del período cargado")
+        panel_heading("Lectura de negocio", ("Mercado + peajes y cargos 6.2TD" if tariff_mode() else "Precio de mercado") + " · resultados del período cargado")
         scale = max(abs(cost_s0), abs(cost_s1), 1)
         markup(f"""
             <div class="insight-label">Reducción frente a S0</div>
@@ -290,8 +330,9 @@ def render_summary(monthly: pd.DataFrame, daily: pd.DataFrame, saving: float) ->
             <p class="impact-note">Diferencia S0 − S1 de {format_eur(saving)} en {len(daily)} días con programación válida.</p>
             <div class="compare-row"><span>S0</span><div class="compare-track"><div class="compare-fill" style="width:{abs(cost_s0) / scale * 100}%;background:#aab7b1"></div></div><span class="compare-value">{format_eur(cost_s0)}</span></div>
             <div class="compare-row"><span>S1</span><div class="compare-track"><div class="compare-fill" style="width:{abs(cost_s1) / scale * 100}%"></div></div><span class="compare-value">{format_eur(cost_s1)}</span></div>
-            <div class="recommendation"><strong>Alcance del resultado</strong><p>Consumos del escenario industrial del caso 4. El coste incluye solo energía a precio de mercado: no incluye peajes, cargos ni impuestos. Validar las restricciones de planta antes de aplicar la programación.</p></div>
+            <div class="recommendation"><strong>Alcance del resultado</strong><p>Consumos del escenario industrial del caso 4. {escape(scope_text())} Validar las restricciones de planta antes de aplicar la programación.</p></div>
         """)
+    render_hypotheses()
 
     st.divider()
     description, date_column, button_column = st.columns([1.4, 1, 1])
@@ -351,13 +392,24 @@ def render_daily_temperature(selected_date: date) -> None:
                    f'<small>{escape(detail)}</small></div>')
 
 
+def cost_breakdown(schedule: pd.DataFrame, scenario: str) -> str:
+    """Market / tolls / charges split of one scenario for the selected day."""
+    consumption = schedule[f"consumo_{scenario}_mwh"]
+    market = schedule[f"coste_mercado_{scenario}_eur"].sum()
+    tolls = (consumption * schedule["peaje_energia_eur_mwh"]).sum()
+    charges = (consumption * schedule["cargo_energia_eur_mwh"]).sum()
+    return f"Mercado {format_eur(market)} + peajes {format_eur(tolls)} + cargos {format_eur(charges)}."
+
+
 def render_daily_schedule(schedule: pd.DataFrame, totals: pd.Series) -> None:
+    tariff = tariff_mode()
     markup(f'<p class="section-intro">Plan Gold · {int(totals["horas_del_dia"])} intervalos horarios reales · Europe/Madrid. Los cambios de hora se conservan.</p>')
     table_column, summary_column = st.columns([1.35, .65])
     with table_column, st.container(border=True):
         panel_heading(
             f"Programación horaria · {format_date(st.session_state.selected_date)}",
-            "Precios REData · asignación S0/S1 leída de la programación horaria Gold.",
+            "Precios REData · asignación S0/S1 leída de la programación horaria Gold."
+            + (" Costes con peajes y cargos 6.2TD del periodo de cada hora." if tariff else ""),
         )
         markup('<span class="sample-label">Resultados Gold</span>')
         rows = []
@@ -370,15 +422,17 @@ def render_daily_schedule(schedule: pd.DataFrame, totals: pd.Series) -> None:
             )
             current = f"{row.consumo_baseline_mwh:g}".replace(".", ",")
             optimized = f"{row.consumo_optimizado_mwh:g}".replace(".", ",")
+            period = f'<td>{escape(str(row.periodo_tarifario))}</td>' if tariff else ""
             rows.append(
-                f'<tr class="{"picked" if picked else ""}"><td>{start:%H:%M %Z}–{end:%H:%M %Z}</td>'
+                f'<tr class="{"picked" if picked else ""}"><td>{start:%H:%M %Z}–{end:%H:%M %Z}</td>{period}'
                 f'<td class="numeric">{format_number(row.precio_eur_mwh, 4)}</td>'
                 f'<td class="numeric">{current}</td><td class="numeric">{optimized}</td>'
                 f'<td class="numeric">{format_eur(row.coste_baseline_eur)}</td>'
                 f'<td class="numeric">{format_eur(row.coste_optimizado_eur)}</td><td>{action}</td></tr>'
             )
+        period_header = '<th>Periodo</th>' if tariff else ""
         markup('<div class="table-wrap"><table class="dispatch-table"><thead><tr>'
-               '<th>Hora</th><th class="numeric">Precio EUR/MWh</th><th class="numeric">S0 MWh</th>'
+               f'<th>Hora</th>{period_header}<th class="numeric">Precio EUR/MWh</th><th class="numeric">S0 MWh</th>'
                '<th class="numeric">S1 MWh</th><th class="numeric">Coste S0</th><th class="numeric">Coste S1</th><th>Acción S1</th></tr></thead><tbody>'
                + "".join(rows) + '</tbody></table></div>')
         st.download_button(
@@ -388,23 +442,28 @@ def render_daily_schedule(schedule: pd.DataFrame, totals: pd.Series) -> None:
     with summary_column:
         with st.container(border=True):
             panel_heading("Coste del día", "Suma de los resultados horarios Gold · sin reoptimizar")
+            detail_s0 = cost_breakdown(schedule, "baseline") if tariff else ""
+            detail_s1 = cost_breakdown(schedule, "optimizado") if tariff else ""
+            notice = escape(TARIFF_LABEL) if tariff else "Resultado del escenario de carga flexible; no es la factura final."
             markup(f"""
-                <div class="daily-result"><span>Coste S0</span><strong>{format_eur(totals['coste_baseline_total_eur'])}</strong><small>{format_number(totals['consumo_baseline_total_mwh'])} MWh de consumo de referencia.</small></div>
-                <div class="daily-result"><span>Coste S1</span><strong>{format_eur(totals['coste_optimizado_total_eur'])}</strong><small>{format_number(totals['consumo_optimizado_total_mwh'])} MWh de consumo optimizado.</small></div>
+                <div class="daily-result"><span>Coste S0</span><strong>{format_eur(totals['coste_baseline_total_eur'])}</strong><small>{format_number(totals['consumo_baseline_total_mwh'])} MWh de consumo de referencia. {detail_s0}</small></div>
+                <div class="daily-result"><span>Coste S1</span><strong>{format_eur(totals['coste_optimizado_total_eur'])}</strong><small>{format_number(totals['consumo_optimizado_total_mwh'])} MWh de consumo optimizado. {detail_s1}</small></div>
                 <div class="daily-result"><span>Ahorro del día</span><strong class="positive">{format_eur(totals['ahorro_eur'])}</strong><small>{format_pct(totals['ahorro_pct'])} sobre el coste S0 del día.</small></div>
-                <div class="notice">Resultado del escenario de carga flexible; no es la factura final. El ahorro de este día no se extrapola al año.</div>
+                <div class="notice">{notice} El ahorro de este día no se extrapola al año.</div>
             """)
+        render_hypotheses()
         render_daily_temperature(st.session_state.selected_date)
         with st.container(border=True):
             panel_heading("Regla de decisión", "Parámetros del caso 4 · aplicados por el proceso Gold")
             markup(f'<div class="formula">energía diaria = {format_number(totals["energia_flexible_objetivo_mwh"])} MWh<br>límite = {format_number(totals["limite_flexible_mwh_por_hora"])} MWh/h<br>priorizar precios más bajos<br>empates: 08:00–17:00 y hora más temprana</div>')
-            st.caption("Política del caso 4: precios negativos a cero antes de la media horaria (aplicada en Silver).")
+            st.caption("Política del caso 4: los precios negativos se conservan sin truncar (precio real de mercado).")
 
 
 def render_analysis(monthly: pd.DataFrame, period_saving: float) -> None:
     note_column, filter_column = st.columns([2, 1])
     with note_column:
-        markup('<p class="section-intro">Resultados Gold · agregados de los días válidos disponibles.</p>')
+        markup('<p class="section-intro">Resultados Gold · agregados de los días válidos disponibles.'
+               + (" Ahorro con peajes y cargos 6.2TD, antes de IVA e IEE." if tariff_mode() else "") + '</p>')
     with filter_column:
         periods = ["Todo el período disponible", "T1 · Enero–marzo", "T2 · Abril–junio", "T3 · Julio–septiembre", "T4 · Octubre–diciembre"]
         if st.session_state.get("analysis_period") not in periods:
@@ -483,6 +542,19 @@ def main() -> None:
             <div class="nav-label">Resultados de optimización</div>
         """)
         view = st.radio("Vistas", VIEWS, key="view", label_visibility="collapsed", format_func=lambda name: f"0{VIEWS.index(name) + 1}  {name}")
+        if st.session_state.get("cost_mode") not in COST_MODES:
+            st.session_state.cost_mode = "tariff"
+        st.segmented_control(
+            "Cálculo del coste", list(COST_MODES), key="cost_mode", required=True,
+            format_func=COST_MODES.get, width="stretch",
+            help=f"6.2TD: caso académico {STUDY_START:%d/%m/%Y}–{STUDY_END:%d/%m/%Y}, antes de IVA e IEE.",
+        )
+        if tariff_mode():
+            monthly, summary, plan = apply_tariff_scenario(monthly, summary, plan)
+            if summary.empty:
+                st.warning("Gold no contiene días con peajes y cargos 6.2TD en el periodo de estudio.")
+                st.caption(f"Origen S3: {GOLD_S3_URI}")
+                st.stop()
         years = sorted({value.year for value in summary["fecha_local"]})
         if st.session_state.get("selected_year") not in years:
             st.session_state.selected_year = years[-1]
@@ -536,8 +608,12 @@ def main() -> None:
         render_daily_schedule(schedule, totals)
     else:
         render_analysis(monthly, period_saving)
-    markup("""
-        <footer class="footer-note"><span><strong>Coste de energía a precio de mercado.</strong> Sin peajes, cargos ni impuestos.</span><span>Resultados del escenario de carga flexible · Caso 4</span></footer>
+    footer = (
+        "<strong>Mercado + peajes y cargos 6.2TD.</strong> Antes de IVA e IEE · simulación académica, no factura real."
+        if tariff_mode() else "<strong>Coste de energía a precio de mercado.</strong> Sin peajes, cargos ni impuestos."
+    )
+    markup(f"""
+        <footer class="footer-note"><span>{footer}</span><span>Resultados del escenario de carga flexible · Caso 4</span></footer>
     """)
 
 

@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 from contextlib import closing
+from datetime import date
 from io import BytesIO
+import os
 
 import boto3
 import numpy as np
 import pandas as pd
+from dotenv import load_dotenv
 
+load_dotenv()
 
 S3_BUCKET = "energy-optimizer-grupo4"
-S3_PREFIX = "outputs/redata"
+# Same variable as notebooks 02/03; selects outputs/<prefix>/ (default outputs/redata).
+S3_PREFIX = f"outputs/{os.getenv('REDATA_S3_PREFIX', 'redata').strip('/')}"
 S3_REGION = "eu-north-1"
 GOLD_S3_URI = f"s3://{S3_BUCKET}/{S3_PREFIX}/"
 MONTHLY_FILENAME = "gold_plan_mensual.parquet"
@@ -36,6 +41,16 @@ HOURLY_NUMERIC = [
 	"precio_eur_mwh", "consumo_baseline_mwh", "consumo_optimizado_mwh",
 	"coste_baseline_eur", "coste_optimizado_eur",
 ]
+# 6.2TD energy tolls and charges published by Gold; empty (NaN) on days without a loaded tariff.
+TARIFF_HOURLY_NUMERIC = [
+	"peaje_energia_eur_mwh", "cargo_energia_eur_mwh",
+	"coste_regulado_baseline_eur", "coste_regulado_optimizado_eur",
+	"coste_total_baseline_eur", "coste_total_optimizado_eur",
+]
+TARIFF_PERIODS = {"P1", "P2", "P3", "P4", "P5", "P6"}
+# Academic case study window for the 6.2TD view.
+STUDY_START = date(2026, 1, 1)
+STUDY_END = date(2026, 10, 31)
 
 
 def read_table(filename: str, required: list[str], *, prefix: str = S3_PREFIX) -> pd.DataFrame:
@@ -78,7 +93,7 @@ def load_temperature_table() -> pd.DataFrame:
 def load_gold_tables() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
 	"""Read the current monthly/hourly contract and aggregate already optimized hours."""
 	monthly = read_table(MONTHLY_FILENAME, ["mes", *MONTHLY_NUMERIC])
-	plan = read_table(HOURLY_FILENAME, ["fecha_local", "hora_local", *HOURLY_NUMERIC])
+	plan = read_table(HOURLY_FILENAME, ["fecha_local", "hora_local", *HOURLY_NUMERIC, "periodo_tarifario", *TARIFF_HOURLY_NUMERIC])
 	if plan.empty or monthly.empty:
 		raise ValueError("Las tablas Gold mensual y horaria deben contener resultados.")
 	plan["fecha_local"] = pd.to_datetime(plan["fecha_local"], format="%Y-%m-%d", errors="raise").dt.date
@@ -90,6 +105,10 @@ def load_gold_tables() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
 		raise ValueError("La tabla mensual contiene meses duplicados.")
 	numeric_columns(monthly, MONTHLY_NUMERIC, MONTHLY_FILENAME)
 	numeric_columns(plan, ["hora_local", *HOURLY_NUMERIC], HOURLY_FILENAME)
+	for column in TARIFF_HOURLY_NUMERIC:
+		plan[column] = pd.to_numeric(plan[column], errors="raise")
+		if np.isinf(plan[column].to_numpy(dtype=float, na_value=np.nan)).any():
+			raise ValueError(f"{HOURLY_FILENAME}: {column} contiene valores no finitos.")
 	if not plan["hora_local"].between(0, 23).all() or not (plan["hora_local"] % 1 == 0).all():
 		raise ValueError("hora_local debe ser un entero entre 0 y 23.")
 	schedules = []
@@ -110,6 +129,7 @@ def load_gold_tables() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
 				raise ValueError(f"{day}: energía diaria {scenario} distinta del objetivo del caso 4.")
 			if not np.allclose(schedule["precio_eur_mwh"] * consumption, schedule[f"coste_{scenario}_eur"], atol=1e-4, rtol=0):
 				raise ValueError(f"{day}: coste {scenario} distinto de precio por consumo.")
+		validate_tariff_day(day, schedule)
 		schedules.append(schedule)
 	plan = pd.concat(schedules, ignore_index=True)
 	summary = plan.groupby("fecha_local", as_index=False, sort=True).agg(
@@ -119,6 +139,11 @@ def load_gold_tables() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
 		coste_baseline_total_eur=("coste_baseline_eur", "sum"),
 		coste_optimizado_total_eur=("coste_optimizado_eur", "sum"),
 	)
+	regulated = plan.groupby("fecha_local", sort=True)[
+		["coste_regulado_baseline_eur", "coste_regulado_optimizado_eur"]
+	].sum(min_count=1)
+	summary["coste_regulado_baseline_total_eur"] = regulated["coste_regulado_baseline_eur"].to_numpy()
+	summary["coste_regulado_optimizado_total_eur"] = regulated["coste_regulado_optimizado_eur"].to_numpy()
 	summary["ahorro_eur"] = (summary["coste_baseline_total_eur"] - summary["coste_optimizado_total_eur"]).round(5)
 	summary["ahorro_pct"] = summary["ahorro_eur"] / summary["coste_baseline_total_eur"].replace(0, float("nan")) * 100
 	summary["energia_flexible_objetivo_mwh"] = ENERGY_TARGET_MWH
@@ -147,3 +172,56 @@ def load_gold_tables() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
 		raise ValueError("El precio medio anual no coincide con la programación horaria.")
 	monthly["days"] = daily_totals["days"].to_numpy()
 	return monthly, summary.drop(columns="month"), plan
+
+
+def validate_tariff_day(day: date, schedule: pd.DataFrame) -> None:
+	"""A day carries either no tariff at all or a complete and consistent 6.2TD breakdown."""
+	present = schedule[TARIFF_HOURLY_NUMERIC].notna().all(axis=1)
+	if not present.any():
+		return
+	if not present.all():
+		raise ValueError(f"{day}: peajes y cargos 6.2TD incompletos.")
+	if not schedule["periodo_tarifario"].isin(TARIFF_PERIODS).all():
+		raise ValueError(f"{day}: periodo tarifario fuera de P1-P6.")
+	regulated_price = schedule["peaje_energia_eur_mwh"] + schedule["cargo_energia_eur_mwh"]
+	for scenario in ("baseline", "optimizado"):
+		regulated = schedule[f"consumo_{scenario}_mwh"] * regulated_price
+		if not np.allclose(regulated, schedule[f"coste_regulado_{scenario}_eur"], atol=1e-4, rtol=0):
+			raise ValueError(f"{day}: coste regulado {scenario} distinto de consumo por peaje y cargo.")
+		total = schedule[f"coste_{scenario}_eur"] + schedule[f"coste_regulado_{scenario}_eur"]
+		if not np.allclose(total, schedule[f"coste_total_{scenario}_eur"], atol=1e-4, rtol=0):
+			raise ValueError(f"{day}: coste total {scenario} distinto de mercado más regulado.")
+
+
+def apply_tariff_scenario(
+	monthly: pd.DataFrame, summary: pd.DataFrame, plan: pd.DataFrame,
+	start: date = STUDY_START, end: date = STUDY_END,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+	"""Restrict to the study window and replace market-only costs with market + 6.2TD tolls and charges.
+
+	Market-only costs are kept as coste_mercado_* so the UI can show the breakdown.
+	"""
+	summary = summary[
+		summary["fecha_local"].map(lambda value: start <= value <= end)
+		& summary["coste_regulado_baseline_total_eur"].notna()
+	].copy()
+	plan = plan[plan["fecha_local"].isin(set(summary["fecha_local"]))].copy()
+	for scenario in ("baseline", "optimizado"):
+		summary[f"coste_mercado_{scenario}_total_eur"] = summary[f"coste_{scenario}_total_eur"]
+		summary[f"coste_{scenario}_total_eur"] = (
+			summary[f"coste_{scenario}_total_eur"] + summary[f"coste_regulado_{scenario}_total_eur"]
+		)
+		plan[f"coste_mercado_{scenario}_eur"] = plan[f"coste_{scenario}_eur"]
+		plan[f"coste_{scenario}_eur"] = plan[f"coste_total_{scenario}_eur"]
+	summary["ahorro_eur"] = (summary["coste_baseline_total_eur"] - summary["coste_optimizado_total_eur"]).round(5)
+	summary["ahorro_pct"] = summary["ahorro_eur"] / summary["coste_baseline_total_eur"].replace(0, float("nan")) * 100
+	month = pd.to_datetime(summary["fecha_local"]).dt.strftime("%Y-%m")
+	totals = summary.groupby(month, sort=True).agg(saving_eur=("ahorro_eur", "sum"), days=("fecha_local", "count"))
+	prices = plan.groupby(plan["datetime_local"].dt.strftime("%Y-%m"))["precio_eur_mwh"].mean()
+	monthly = monthly[monthly["month"].isin(totals.index)].copy().set_index("month")
+	monthly["saving_eur"] = totals["saving_eur"]
+	monthly["days"] = totals["days"]
+	monthly["precio_spot_medio_mensual_eur_mwh"] = prices.reindex(monthly.index)
+	monthly["ahorro_estimado_anual_eur"] = float(totals["saving_eur"].sum())
+	monthly["precio_spot_medio_anual_eur_mwh"] = float(plan["precio_eur_mwh"].mean()) if len(plan) else float("nan")
+	return monthly.reset_index(), summary, plan
