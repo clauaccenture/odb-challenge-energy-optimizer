@@ -20,6 +20,7 @@ from data_loader import (
 )
 from desaladora_data import DESALADORA_S3_URI, load_desaladora_tables
 from desaladora_view import SOM_SCOPE, render_case, render_indexed_schedule
+from formatting import format_eur, format_number, format_pct
 
 
 st.set_page_config(
@@ -75,16 +76,6 @@ def render_hypotheses() -> None:
 """)
 
 
-def format_number(value: float, decimals: int = 2) -> str:
-    return f"{value:,.{decimals}f}".replace(",", "_").replace(".", ",").replace("_", ".")
-
-
-def format_eur(value: float) -> str:
-    if pd.isna(value):
-        return "Sin datos"
-    return f"{format_number(value)} €"
-
-
 def month_label(value: str) -> str:
     year, month = value.split("-")
     return f"{MONTH_NAMES[int(month) - 1]} {year}"
@@ -92,12 +83,6 @@ def month_label(value: str) -> str:
 
 def markup(content: str) -> None:
     st.markdown(dedent(content), unsafe_allow_html=True)
-
-
-def format_pct(value: float) -> str:
-    if pd.isna(value):
-        return "No aplica"
-    return f"{value:.1f}".replace(".", ",") + " %"
 
 
 def format_date(value: date) -> str:
@@ -580,8 +565,7 @@ def main() -> None:
         st.caption(f"Origen S3: {source}")
         st.info("Comprueba el rol IAM y s3:GetObject. No se utilizan datos locales ni otro escenario como alternativa.")
         if som:
-            st.code("python notebooks/03_gold_redata.py --config config/config_desaladora.yaml --s3", language="bash")
-            st.caption("Publica el caso desde EC2 antes de consultarlo. El dashboard no ejecuta el optimizador ni escribe en S3.")
+            st.caption("Los resultados del caso no están disponibles. Solicita su actualización antes de consultarlos.")
         st.stop()
     with st.sidebar:
         if tariff_mode() and not som:
@@ -596,13 +580,14 @@ def main() -> None:
         selected_year = st.selectbox("Año de resultados", years, key="selected_year")
         st.divider()
         if som:
-            st.caption("Ejecución coherente: latest → metadata → Parquet verificados por SHA256.")
+            st.caption("Resultados del caso Som Energia · fuente REData.")
         else:
             markup("""
             <div class="source-box"><div class="source-title">Fuente de datos</div><div class="source-row"><span>REData · precios</span><span class="source-state">Gold S3</span></div></div>
             <div class="sidebar-note">gold_plan_mensual.parquet<br>gold_programacion_horaria.parquet<br>Zona horaria: Europe/Madrid</div>
         """)
-        st.caption(f"Origen S3: {source}")
+        if not som:
+            st.caption(f"Origen S3: {source}")
     single_year = monthly["month"].str[:4].nunique() == 1
     monthly = monthly[monthly["month"].str[:4] == str(selected_year)].copy()
     summary = summary[summary["fecha_local"].map(lambda value: value.year == selected_year)].copy()
@@ -612,17 +597,21 @@ def main() -> None:
     coverage = f"{first:%d/%m/%Y} – {last:%d/%m/%Y}"
     subtitles = {
         VIEWS[0]: "Comparación de costes S0/S1 sobre el período disponible.",
-        VIEWS[1]: "Precios y programación de carga flexible por intervalo horario local.",
+        VIEWS[1]: "Horas elegidas para mover la carga flexible del día.",
         VIEWS[2]: "Ahorro acumulado y contribución mensual de la programación optimizada.",
         VIEWS[3]: "Contrato de referencia, datos documentados, supuestos y límites de la simulación.",
     }
+    data_badge = "SIMULACIÓN · CARGA FLEXIBLE" if som else "TABLAS GOLD · PARQUET S3"
     markup(f"""
-        <div class="topline"><div class="crumb">Energía / <strong>Resultados</strong></div><div class="data-badge">TABLAS GOLD · PARQUET S3</div></div>
+        <div class="topline"><div class="crumb">Energía / <strong>Resultados</strong></div><div class="data-badge">{data_badge}</div></div>
         <header class="page-heading"><div><div class="eyebrow">Caso 4 · Carga flexible industrial</div><h1>{view}</h1><p class="heading-sub">{subtitles[view]}</p></div><div class="period-tag">{coverage}</div></header>
     """)
     if som:
-        st.warning(SOM_SCOPE)
-        st.info(f"Cobertura disponible: {len(daily)} días con programación de {calendar_days} días naturales; {calendar_days - len(daily)} sin programación. Motivos disponibles en Caso desaladora. No se anualizan los totales.")
+        if view in (VIEWS[1], VIEWS[3]):
+            st.caption("Simulación Som Energia · aproximación horaria · antes de impuestos · no contrato ni factura real.")
+        else:
+            st.warning(SOM_SCOPE)
+            st.info(f"Cobertura disponible: {len(daily)} días con programación de {calendar_days} días naturales; {calendar_days - len(daily)} sin programación. Motivos disponibles en Caso desaladora. No se anualizan los totales.")
     else:
         st.info(f"Cobertura disponible: {len(daily)} días con programación de {calendar_days} días naturales entre las fechas cargadas; {calendar_days - len(summary)} sin programación publicada. Gold no publica el motivo de las fechas ausentes. Los totales no se anualizan ni representan necesariamente meses completos.")
     if view == VIEWS[3] and metadata is not None:
@@ -648,13 +637,14 @@ def main() -> None:
         totals = daily.loc[daily["fecha_local"] == selected_date].iloc[0]
         if som:
             render_indexed_schedule(schedule)
-            st.metric("Ahorro simulado del día · carga flexible", format_eur(totals["ahorro_eur"]))
-            render_daily_temperature(selected_date)
+            with st.expander("Ver temperatura del día", key="som_temperature_details", on_change="rerun") as details:
+                if details.open:
+                    render_daily_temperature(selected_date)
         else:
             render_daily_schedule(schedule, totals)
     else:
         render_analysis(monthly, period_saving)
-    footer = SOM_SCOPE if som else (
+    footer = "Simulación horaria con precio indexado completo · antes de impuestos · no factura real." if som else (
         "<strong>Mercado + peajes y cargos 6.2TD.</strong> Antes de IVA e IEE · simulación académica, no factura real."
         if tariff_mode() else "<strong>Coste de energía a precio de mercado.</strong> Sin peajes, cargos ni impuestos."
     )

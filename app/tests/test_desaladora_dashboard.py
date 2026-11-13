@@ -138,7 +138,7 @@ class DesaladoraDashboardTests(unittest.TestCase):
 
     def test_all_four_views_use_indexed_run_without_legacy_and_refresh_s3(self):
         with patch.object(data_loader, "load_gold_tables", side_effect=AssertionError("No legacy fallback")):
-            with patch.object(data_loader, "load_temperature_table", return_value=pd.DataFrame(columns=["fecha", "tmin", "tmax", "tmed"])):
+            with patch.object(data_loader, "load_temperature_table", return_value=pd.DataFrame(columns=["fecha", "tmin", "tmax", "tmed"])) as temperature_loader:
                 app = self.app()
                 summary_key = self.metadata["outputs_s3"]["resumen_diario.parquet"]
                 saving = pd.read_parquet(BytesIO(self.objects[summary_key]))["ahorro_energia_eur"].sum()
@@ -151,23 +151,25 @@ class DesaladoraDashboardTests(unittest.TestCase):
                 self.assertNotIn("nan €", markup)
                 app.radio(key="view").set_value("Programación diaria").run()
                 self.assertEqual(list(app.exception), [])
-                hourly = app.dataframe[0].value
-                self.assertEqual(len(hourly), 25)
-                repeated = hourly[hourly["Intervalo local"].str.startswith("02:00")]
-                self.assertEqual(len(repeated), 2)
-                self.assertTrue(repeated["Intervalo local"].str.contains("CEST").any())
-                self.assertTrue(repeated["Intervalo local"].str.contains("CET").any())
+                chosen = app.dataframe[0].value
+                self.assertEqual(len(chosen), 5)
+                self.assertEqual(chosen["Energía a mover (MWh)"].sort_values().tolist(), [2, 7, 7, 7, 7])
+                self.assertEqual(list(chosen.columns), ["Hora elegida", "Energía a mover (MWh)"])
+                self.assertEqual(len(app.dataframe), 1)
+                temperature_loader.assert_not_called()
+                app.session_state["som_price_details"] = True
+                app.run()
+                self.assertEqual(len(app.dataframe), 2)
                 app.selectbox(key="schedule_month").set_value(pd.Timestamp("2026-12-01").date()).run()
                 self.assertTrue(app.button(key="schedule_day_2026-12-25").disabled)
                 app.button(key="schedule_day_2026-12-24").click().run()
-                self.assertEqual(len(app.dataframe[0].value), 24)
-                self.assertTrue(app.dataframe[0].value["Indexado EUR/MWh"].gt(app.dataframe[0].value["Spot EUR/MWh"]).all())
-                hourly = app.dataframe[0].value
-                chosen = hourly[hourly["Flexible S1 MWh"] > 0]
-                self.assertTrue(chosen["Periodo"].eq("P6").all())
-                self.assertGreater(chosen["Spot EUR/MWh"].min(), hourly["Spot EUR/MWh"].min())
+                self.assertEqual(app.dataframe[0].value["Energía a mover (MWh)"].sum(), 30)
                 costs = app.dataframe[1].value
                 self.assertAlmostEqual(costs["Ahorro EUR"].sum(), float(app.metric[-1].value.replace(" €", "").replace(".", "").replace(",", ".")), places=2)
+                app.session_state["som_temperature_details"] = True
+                app.run()
+                temperature_loader.assert_called_once()
+                self.assertEqual(list(app.exception), [])
                 app.radio(key="view").set_value("Evolución del ahorro").run()
                 self.assertEqual(list(app.exception), [])
                 mean_saving = saving / 2
@@ -175,9 +177,21 @@ class DesaladoraDashboardTests(unittest.TestCase):
                 self.assertIn(formatted_mean + " €", "\n".join(item.value for item in app.markdown))
                 app.radio(key="view").set_value("Caso desaladora").run()
                 self.assertEqual(list(app.exception), [])
-                parameters = app.dataframe[1].value
-                self.assertIn("Supuesto / aproximación", parameters["Clasificación"].tolist())
-                self.assertIn("Documentado", parameters["Clasificación"].tolist())
+                legend = app.table[0].value
+                self.assertEqual(set(legend["Símbolo"]), {
+                    "PH", "PHM", "Pc", "Sc", "Dsv", "GdO", "POsOm", "Perd", "FE", "F", "PTD", "CA", "1,015",
+                })
+                self.assertEqual(len(app.dataframe), 0)
+                self.assertFalse(any(item.value.startswith("SHA256 Silver:") for item in app.caption))
+                app.session_state["som_case_details"] = True
+                app.run()
+                self.assertEqual(list(app.dataframe[0].value.columns), ["Fecha", "Resultado"])
+                self.assertIn("Sin precios disponibles", app.dataframe[0].value["Resultado"].tolist())
+                self.assertEqual(len(app.dataframe), 2)
+                self.assertFalse(app.code)
+                self.assertFalse(app.json)
+                self.assertFalse(app.get("download_button"))
+                self.assertFalse(any("SHA256" in item.value or "s3://" in item.value for item in app.caption))
                 self.assertTrue(app.segmented_control(key="cost_mode").disabled)
                 self.assertEqual(self.client.get_object.call_count, 5)
                 next(button for button in app.button if button.label == "Actualizar datos de S3").click().run()
@@ -187,8 +201,48 @@ class DesaladoraDashboardTests(unittest.TestCase):
     def test_case_screen_loads_without_legacy_even_when_legacy_mode_selected(self):
         with patch.object(data_loader, "load_gold_tables", side_effect=AssertionError("Legacy must not load")):
             app = self.app(mode="tariff", view="Caso desaladora")
-        parameters = app.dataframe[1].value.set_index("Parámetro")
-        self.assertEqual(parameters.loc["contrato.f_eur_mwh", "Clasificación"], "Supuesto / aproximación")
+        legend = app.table[0].value.set_index("Símbolo")
+        self.assertIn("Supuesto", legend.loc["F", "Base del dato"])
+        self.assertIn("Publicado", legend.loc["1,015", "Base del dato"])
+        markup = "\n".join(item.value for item in app.markdown)
+        self.assertIn("Referencia del TFM", [item.value for item in app.subheader])
+        self.assertIn("66", markup)
+
+    def test_daily_csv_and_cost_card_only_include_flexible_load_with_matching_savings(self):
+        source = pd.read_parquet(BytesIO(self.objects[self.metadata["outputs_s3"]["programacion_horaria.parquet"]]))
+        with patch.object(st, "download_button", wraps=st.download_button) as downloads:
+            app = self.app(view="Programación diaria")
+            for day, expected_hours in (("2026-10-25", 25), ("2026-12-24", 24)):
+                with self.subTest(day=day):
+                    app.session_state["selected_date"] = pd.Timestamp(day).date()
+                    app.run()
+                    self.assertEqual(list(app.exception), [])
+                    exported = pd.read_csv(BytesIO(downloads.call_args.args[1]))
+                    self.assertEqual(list(exported.columns), [
+                        "Hora local", "Precio EUR/MWh", "Carga S0 MWh", "Carga S1 MWh",
+                        "Coste S0 EUR", "Coste S1 EUR", "Ahorro EUR",
+                    ])
+                    self.assertEqual(len(exported), expected_hours)
+                    self.assertEqual(pd.to_datetime(exported["Hora local"], utc=True).nunique(), expected_hours)
+                    self.assertAlmostEqual(exported["Carga S0 MWh"].sum(), 30)
+                    self.assertAlmostEqual(exported["Carga S1 MWh"].sum(), 30)
+                    self.assertEqual(exported.loc[exported["Carga S1 MWh"] > 0, "Carga S1 MWh"].sort_values().tolist(), [2, 7, 7, 7, 7])
+                    daily_source = source[source["fecha_local"] == pd.Timestamp(day).date()]
+                    self.assertAlmostEqual(exported["Coste S0 EUR"].sum(), daily_source["coste_energia_flexible_baseline_eur"].sum())
+                    self.assertAlmostEqual(exported["Coste S1 EUR"].sum(), daily_source["coste_energia_flexible_optimizado_eur"].sum())
+                    self.assertAlmostEqual(exported["Ahorro EUR"].sum(), exported["Coste S0 EUR"].sum() - exported["Coste S1 EUR"].sum())
+                    metrics = {metric.label: float(metric.value.replace(" €", "").replace(".", "").replace(",", ".")) for metric in app.metric}
+                    self.assertEqual(set(metrics), {"Coste S0 · antes", "Coste S1 · después", "Ahorro del día"})
+                    for metric, column in [
+                        ("Coste S0 · antes", "Coste S0 EUR"), ("Coste S1 · después", "Coste S1 EUR"), ("Ahorro del día", "Ahorro EUR"),
+                    ]:
+                        self.assertAlmostEqual(metrics[metric], exported[column].sum(), places=2)
+                    self.assertTrue(any("Coste del día" == item.value for item in app.subheader))
+                    percentage = (exported["Ahorro EUR"].sum() / exported["Coste S0 EUR"].sum()) * 100
+                    formatted_percentage = f"{percentage:.1f}".replace(".", ",") + " %"
+                    self.assertTrue(any(formatted_percentage + " sobre el coste S0." == item.value for item in app.caption))
+                    self.assertAlmostEqual(app.dataframe[0].value["Energía a mover (MWh)"].sum(), 30)
+                    self.assertFalse(any("planta" in metric.label.lower() for metric in app.metric))
 
     def test_can_switch_between_original_and_indexed_results(self):
         plan_key = self.metadata["outputs_s3"]["programacion_horaria.parquet"]
@@ -218,7 +272,8 @@ class DesaladoraDashboardTests(unittest.TestCase):
             app = self.app()
         self.assertTrue(app.error)
         self.assertIn("NoSuchKey", app.error[0].value)
-        self.assertTrue(any("--config" in item.value for item in app.code))
+        self.assertFalse(app.code)
+        self.assertTrue(any("Solicita su actualización" in item.value for item in app.caption))
         self.assertTrue(any(button.label == "Actualizar datos de S3" for button in app.button))
         self.assertFalse(app.dataframe)
 

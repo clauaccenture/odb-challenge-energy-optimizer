@@ -1,12 +1,11 @@
 """Presentation of the hypothetical indexed desalination case and its provenance."""
 
-import json
-
 import pandas as pd
 import streamlit as st
 import yaml
 
 from desaladora_data import COMPONENTS
+from formatting import format_eur, format_number, format_pct
 
 SOM_SCOPE = (
     "Simulación desaladora · referencia Som Energia 6.2TD, no contrato ni factura real. "
@@ -20,127 +19,172 @@ COMPONENT_LABELS = [
 ]
 
 
-def configuration_rows(config: dict, prefix: str = "") -> list[dict]:
-    rows = []
-    labels = {"documented": "Documentado", "hypothesis": "Supuesto / aproximación", "derived": "Derivado"}
-    for key, node in config.items():
-        path = f"{prefix}.{key}" if prefix else key
-        if isinstance(node, dict) and "value" in node and "source_type" in node:
-            rows.append({
-                "Parámetro": path, "Valor": json.dumps(node["value"], ensure_ascii=False),
-                "Clasificación": labels[node["source_type"]], "Nota": node.get("nota", ""),
-            })
-        elif isinstance(node, dict):
-            rows.extend(configuration_rows(node, path))
-    return rows
-
-
 def render_case(metadata: dict, summary: pd.DataFrame) -> None:
     cfg = yaml.safe_load(metadata["config_yaml"])
-    st.subheader("Caso desaladora · Som Energia de referencia")
-    st.caption(
-        "Documentado significa respaldado por la referencia indicada, no verificado "
-        "en una desaladora operativa ni confirmado por un contrato individual 6.2TD."
-    )
     plant = cfg["planta"]
     flexible = cfg["carga_flexible"]
     volume = plant["volumen_m3_dia"]["value"]
     specific = plant["consumo_especifico_kwh_m3"]["value"]
-    with st.container(horizontal=True):
-        st.metric("Producción de referencia", f"{volume:,.0f} m³/día", border=True)
-        st.metric("Energía estimada · derivada", f"{volume * specific / 1000:g} MWh/día", border=True)
-        st.metric("Carga flexible · supuesta", f"{flexible['energia_diaria_mwh']['value']:g} MWh/día", border=True)
-    st.markdown(
-        "**Contrato ficticio peninsular:** fórmula pública de Som Energia, "
-        "sin oferta individualizada 6.2TD. F se extrapola de 6.1TD; "
-        "las pérdidas y los costes de adquisición son ilustrativos, no calibrados. "
-        "La conservación de precios indexados negativos es una política simulada, "
-        "no una liquidación contractual confirmada."
+    energy = volume * specific / 1000
+    target = flexible["energia_diaria_mwh"]["value"]
+    limit = flexible["limite_mwh_hora"]["value"]
+    reference, assumptions = st.columns(2)
+    with reference, st.container(border=True):
+        st.subheader("Referencia del TFM")
+        volume_label = f"{volume:,.0f}".replace(",", ".")
+        st.markdown(
+            f"- **Producción:** {volume_label} m³/día.\n"
+            f"- **Conexión eléctrica:** {plant['conexion_kv']['value']:g} kV.\n"
+        )
+        st.caption("Datos de la referencia académica utilizada; no mediciones de una planta operativa.")
+    with assumptions, st.container(border=True):
+        st.subheader("Supuestos eléctricos de la demo")
+        st.markdown(
+            f"- **Contrato:** Som Energia indexado, 6.2TD peninsular supuesto; no contrato firmado.\n"
+            f"- **Consumo específico:** {specific:g} kWh/m³ supuesto → {energy:g} MWh/día estimados.\n"
+            f"- **Carga flexible:** {target:g} MWh/día, hasta {limit:g} MWh por hora.\n"
+            f"- **Resto de la carga:** {energy - target:g} MWh/día, repartidos uniformemente.\n"
+        )
+        powers = cfg["operacion_demo"]["potencia_contratada_mw"]
+        power_values = [node["value"] for node in powers.values()]
+        power_label = (
+            f"{power_values[0]:g} MW en P1–P6" if len(set(power_values)) == 1
+            else "; ".join(f"{period.upper()}: {node['value']:g} MW" for period, node in powers.items())
+        )
+        st.caption(f"Potencia contratada supuesta: {power_label}. No es un dato confirmado de la instalación.")
+    st.subheader("Precio indexado de referencia Som Energia")
+    st.latex(r"PH = 1{,}015\,[(PHM + Pc + Sc + Dsv + GdO + POsOm)(1 + Perd) + FE + F] + PTD + CA")
+    st.caption("La fórmula es pública. Su aplicación a este contrato 6.2TD es simulada. Importes en EUR/MWh; Perd es una fracción y 1,015 un factor.")
+    st.table(formula_legend(cfg, metadata["tarifa"]["anio"]), hide_index=True, alt="Leyenda de la fórmula Som: significado, valor y procedencia de cada término")
+    st.caption(
+        "Los importes supuestos son ilustrativos, no costes calibrados ni una oferta Som. "
+        "Dsv no es un recargo del 14 % sobre el spot. Los precios negativos se mantienen "
+        "como hipótesis contractual. Peajes y cargos se suman una sola vez."
     )
-    st.code("PH = 1.015 × [(PHM + Pc + Sc + Dsv + GdO + POsOm) × (1 + Perd) + FE + F] + PTD + CA", language=None)
-    st.info(
-        "S0 y S1 conservan la misma energía diaria. Se comprueba la potencia media horaria "
-        "de toda la planta con la carga no flexible incluida. Eso no garantiza límites "
-        "cuartohorarios ni viabilidad de bombas, membranas, rampas, arranques o depósito de agua."
+    st.caption(
+        "Fuera del cálculo: impuestos, término de potencia y excesos. "
+        "La flexibilidad de bombas, membranas y depósito no está validada en planta."
     )
-    st.subheader("Cobertura y trazabilidad")
-    st.caption(f"Ejecución generada (UTC): {metadata['generado_utc']}")
-    st.caption(f"Silver: {metadata['silver_origen']}")
-    st.caption(f"Versión Silver: {metadata['silver_version_id'] or 'S3 sin identificador de versión'}")
-    st.caption(f"SHA256 Silver: {metadata['silver_sha256']}")
-    st.caption(f"SHA256 configuración: {metadata['config_sha256']}")
-    st.caption(f"Vigencia tarifaria publicada: {metadata['tarifa']['anio']}. Sin extrapolación a otros años.")
     excluded = metadata["horas_silver_fuera_vigencia_tarifa"]
     if excluded:
         st.warning(f"{excluded} horas Silver excluidas por estar fuera de la vigencia tarifaria.")
-    st.dataframe(
-        summary[["fecha_local", "horas_esperadas", "horas_disponibles", "estado_optimizacion"]],
-        hide_index=True, alt="Cobertura diaria y motivos de ausencia de programación",
-    )
-    st.download_button(
-        "Descargar cobertura diaria", summary.to_csv(index=False).encode("utf-8"),
-        file_name="desaladora_cobertura.csv", mime="text/csv",
-    )
-    st.subheader("Datos documentados, supuestos y aproximaciones")
-    st.dataframe(
-        pd.DataFrame(configuration_rows(cfg)), hide_index=True,
-        alt="Parámetros de la configuración realmente utilizada y su clasificación",
-    )
-    with st.expander("Fuentes y configuración exacta de esta ejecución"):
-        st.json(cfg["fuentes_demo"])
-        st.code(metadata["config_yaml"], language="yaml")
-        st.download_button(
-            "Descargar YAML de la ejecución", metadata["config_yaml"].encode("utf-8"),
-            file_name="config_desaladora_ejecucion.yaml", mime="text/yaml",
-        )
-        st.download_button(
-            "Descargar metadata", json.dumps(metadata, ensure_ascii=False, indent=2).encode("utf-8"),
-            file_name="desaladora_metadata.json", mime="application/json",
-        )
+    with st.expander("Ver fuentes y cobertura del caso", key="som_case_details", on_change="rerun") as details:
+        if details.open:
+            st.caption("Documentado significa respaldado por la referencia, no confirmado en una planta ni en un contrato individual.")
+            sources = cfg["fuentes_demo"]
+            for key, label in [
+                ("formula", "Fórmula de Som Energia"),
+                ("historico_gdo", "Histórico de garantías de origen"),
+                ("referencia_f_6_1td", "Referencia comercial 6.1TD"),
+                ("condiciones_6_2td", "Condiciones de alta tensión"),
+                ("peajes", "Peajes regulados"),
+                ("cargos", "Cargos regulados"),
+            ]:
+                st.markdown(f"- [{label}]({sources[key]})")
+            states = {"optimo": "Con programación", "sin_datos": "Sin precios disponibles", "dia_incompleto": "Precios incompletos"}
+            st.dataframe(
+                pd.DataFrame({"Fecha": summary["fecha_local"], "Resultado": summary["estado_optimizacion"].map(states)}),
+                hide_index=True, alt="Cobertura diaria y motivos de ausencia de programación",
+            )
+            tariff = metadata["tarifa"]
+            st.dataframe(pd.DataFrame({
+                "Periodo": list(tariff["peajes_eur_mwh"]),
+                "Peaje EUR/MWh": list(tariff["peajes_eur_mwh"].values()),
+                "Cargo EUR/MWh": [tariff["cargos_eur_mwh"][period] for period in tariff["peajes_eur_mwh"]],
+            }), hide_index=True, alt="Peajes y cargos publicados por periodo tarifario")
+
+
+def formula_legend(cfg: dict, year: int) -> pd.DataFrame:
+    contract = cfg["contrato"]
+    rows = [
+        ("PH", "Precio final de energía de la demo", "Resultado calculado", "Derivado; no factura"),
+        ("PHM", "Precio del mercado diario", "REData · media horaria", "Dato de mercado; aproximación horaria"),
+    ]
+    for symbol, meaning, key, origin in [
+        ("Pc", "Pagos por capacidad", "pc_eur_mwh", "Importe supuesto"),
+        ("Sc", "Sobrecostes de gestión de la red", "sc_eur_mwh", "Importe supuesto"),
+        ("Dsv", "Coste de desvíos de energía", "dsv_eur_mwh", "Importe supuesto"),
+        ("GdO", "Garantías de origen renovable", "gdo_eur_mwh_por_trimestre", "Histórico publicado; criterio fiscal supuesto"),
+        ("POsOm", "Operadores REE y OMIE", "posom_eur_mwh", "Importe supuesto"),
+        ("Perd", "Coeficiente de pérdidas", "perdidas_fraccion", "Coeficiente supuesto"),
+        ("FE", "Aportación al fondo de eficiencia energética", "fe_eur_mwh", "Importe supuesto"),
+        ("F", "Franja o margen de la cooperativa", "f_eur_mwh", "Supuesto para 6.2TD; referencia 6.1TD"),
+    ]:
+        if key == "gdo_eur_mwh_por_trimestre":
+            label = " / ".join(
+                f"{quarter.upper()}: {node['value']:.3f}".replace(".", ",")
+                for quarter, node in contract[key].items()
+            )
+        else:
+            value = contract[key]["value"]
+            label = (f"{value:g} ({value * 100:g} %)" if symbol == "Perd" else f"{value:g}").replace(".", ",")
+        rows.append((symbol, meaning, label, origin))
+    rows.extend([
+        ("PTD", "Peaje de transporte y distribución", f"P1–P6 · {year}", "Importes BOE publicados"),
+        ("CA", "Cargos del sistema eléctrico", f"P1–P6 · {year}", "Importes BOE publicados"),
+        ("1,015", "Factor de la fórmula; no es IVA ni IEE",
+         f"{contract['factor_formula']['value']:g}".replace(".", ","), "Publicado por Som Energia"),
+    ])
+    return pd.DataFrame(rows, columns=["Símbolo", "Significado", "Valor en la demo", "Base del dato"])
 
 
 def render_indexed_schedule(schedule: pd.DataFrame) -> None:
-    st.caption(
-        "Plan S1 publicado por el backend: minimiza el precio indexado completo, no solo el spot. "
-        "Los intervalos conservan su desfase UTC, también durante el cambio de hora."
-    )
     display = schedule.copy()
     display["Intervalo local"] = display["datetime_local"].map(
         lambda value: f"{value:%H:%M %Z %z} – {value + pd.Timedelta(hours=1):%H:%M %Z %z}"
     )
-    labels = {
-        "periodo_tarifario": "Periodo", "precio_eur_mwh": "Spot EUR/MWh",
-        "precio_indexado_eur_mwh": "Indexado EUR/MWh",
-        "consumo_baseline_mwh": "Flexible S0 MWh", "consumo_optimizado_mwh": "Flexible S1 MWh",
-        "consumo_planta_optimizado_mwh": "Planta S1 MWh",
-        "potencia_contratada_mw": "Potencia supuesta MW",
-        "coste_energia_flexible_baseline_eur": "Coste flexible S0 EUR",
-        "coste_energia_flexible_optimizado_eur": "Coste flexible S1 EUR",
-    }
-    st.dataframe(
-        display[["Intervalo local", *labels]].rename(columns=labels), hide_index=True,
-        alt="Programación horaria indexada, consumos flexibles y potencia de planta",
-    )
-    st.subheader("Desglose del coste de energía del día")
-    breakdown = pd.DataFrame({
-        "Componente": COMPONENT_LABELS,
-        "Flexible S0 EUR": [float((schedule[c] * schedule["consumo_baseline_mwh"]).sum()) for c in COMPONENTS],
-        "Flexible S1 EUR": [float((schedule[c] * schedule["consumo_optimizado_mwh"]).sum()) for c in COMPONENTS],
-    })
-    breakdown["Ahorro EUR"] = breakdown["Flexible S0 EUR"] - breakdown["Flexible S1 EUR"]
-    st.dataframe(breakdown, hide_index=True, alt="Coste por componente, con peajes y cargos contados una sola vez")
-    st.caption("Las pérdidas, el factor 1,015 y los costes comerciales ya están incluidos; no se vuelven a sumar peajes ni cargos.")
-    with st.expander("Componentes horarios del precio · EUR/MWh"):
+    selected = display[display["consumo_optimizado_mwh"] > 0]
+    energy = selected["consumo_optimizado_mwh"].sum()
+    hours, results = st.columns([1.4, 1])
+    with hours:
+        st.subheader(f"Mueve los {energy:g} MWh a estas {len(selected)} horas")
+        allocation = selected["consumo_optimizado_mwh"].value_counts().sort_index(ascending=False)
+        distribution = " + ".join(f"{count} h × {amount:g} MWh" for amount, count in allocation.items())
+        st.markdown(f"**{distribution.replace('.', ',')} = {energy:g} MWh**")
         st.dataframe(
-            display[["Intervalo local", *COMPONENTS, "precio_indexado_eur_mwh"]],
-            hide_index=True, alt="Componentes horarios del precio indexado completo",
+            selected[["Intervalo local", "consumo_optimizado_mwh"]].rename(columns={
+                "Intervalo local": "Hora elegida", "consumo_optimizado_mwh": "Energía a mover (MWh)",
+            }), hide_index=True, column_config={
+                "Energía a mover (MWh)": st.column_config.ProgressColumn(
+                    min_value=0, max_value=float(selected["consumo_optimizado_mwh"].max()), format="%g MWh",
+                ),
+            }, alt="Horas elegidas y energía flexible que mover a cada una",
         )
-    with st.container(horizontal=True):
-        for scenario, label in (("baseline", "S0"), ("optimizado", "S1")):
-            cost = schedule[f"coste_energia_planta_{scenario}_eur"].sum()
-            st.metric(f"Energía de toda la planta {label}", f"{cost:,.2f} EUR", border=True)
-    st.caption("Los indicadores de ahorro de las otras vistas usan solo la carga flexible; la carga no flexible es la misma en S0 y S1.")
+        st.caption("En las demás horas, la carga flexible S1 es cero.")
+    baseline = float(schedule["coste_energia_flexible_baseline_eur"].sum())
+    optimized = float(schedule["coste_energia_flexible_optimizado_eur"].sum())
+    saving = baseline - optimized
+    with results, st.container(border=True):
+        st.subheader("Coste del día")
+        st.caption(f"Solo {format_number(energy)} MWh flexibles · antes de impuestos")
+        for label, amount in [("Coste S0 · antes", baseline), ("Coste S1 · después", optimized), ("Ahorro del día", saving)]:
+            st.metric(label, format_eur(amount))
+        percentage = saving / baseline * 100 if baseline > 0 else float("nan")
+        st.caption(f"{format_pct(percentage)} sobre el coste S0." if baseline > 0 else "Porcentaje no aplicable: coste S0 no positivo.")
+    exported = schedule[[
+        "datetime_local", "precio_indexado_eur_mwh", "consumo_baseline_mwh", "consumo_optimizado_mwh",
+        "coste_energia_flexible_baseline_eur", "coste_energia_flexible_optimizado_eur",
+    ]].copy()
+    exported["ahorro_eur"] = exported["coste_energia_flexible_baseline_eur"] - exported["coste_energia_flexible_optimizado_eur"]
+    exported = exported.rename(columns={
+        "datetime_local": "Hora local", "precio_indexado_eur_mwh": "Precio EUR/MWh",
+        "consumo_baseline_mwh": "Carga S0 MWh", "consumo_optimizado_mwh": "Carga S1 MWh",
+        "coste_energia_flexible_baseline_eur": "Coste S0 EUR",
+        "coste_energia_flexible_optimizado_eur": "Coste S1 EUR", "ahorro_eur": "Ahorro EUR",
+    })
     st.download_button(
-        "Descargar plan del día", schedule.to_csv(index=False).encode("utf-8"),
+        "Descargar plan del día", exported.to_csv(index=False).encode("utf-8"),
         file_name=f"desaladora_plan_{schedule['fecha_local'].iloc[0]}.csv", mime="text/csv",
     )
+    with st.expander("Ver desglose de energía flexible", key="som_price_details", on_change="rerun") as details:
+        if details.open:
+            breakdown = pd.DataFrame({
+                "Componente": COMPONENT_LABELS,
+                "Flexible S0 EUR": [float((schedule[c] * schedule["consumo_baseline_mwh"]).sum()) for c in COMPONENTS],
+                "Flexible S1 EUR": [float((schedule[c] * schedule["consumo_optimizado_mwh"]).sum()) for c in COMPONENTS],
+            })
+            breakdown["Ahorro EUR"] = breakdown["Flexible S0 EUR"] - breakdown["Flexible S1 EUR"]
+            st.dataframe(
+                breakdown, hide_index=True, key="som_cost_details",
+                alt="Desglose del coste con peajes y cargos contados una sola vez",
+            )

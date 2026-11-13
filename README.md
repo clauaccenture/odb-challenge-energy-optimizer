@@ -116,14 +116,21 @@ bono social, IVA e IEE estan fuera.
 
 En las tres vistas de resultados, seleccionar **Desaladora · Som Energia
 (simulado)** para consultar costes y ahorro de la carga flexible reoptimizada
-con PH. La programacion diaria incluye spot frente a precio indexado, potencia
-media de planta, desglose por componente y descarga CSV.
+con PH. La programacion diaria muestra de un vistazo las horas elegidas y la
+energia a mover: en este caso, 4 horas de 7 MWh y 1 hora de 2 MWh.
+Los costes S0/S1 y ahorro se resumen en una tarjeta del dia, solo para la carga
+flexible; no se muestran costes de la planta completa. El desglose de energia
+queda plegado como detalle opcional. El CSV tiene siete columnas con hora,
+precio indexado, carga S0/S1, coste S0/S1 y ahorro. Conserva todas las horas
+del dia para cuadrar los totales; no cambia el plan calculado en Gold.
 
 La cuarta vista, **Caso desaladora**, utiliza siempre la ejecucion Som, aunque
-este seleccionado otro modo de coste. Muestra cobertura y motivos de ausencias,
-clasificacion de cada parametro, fuentes, limitaciones y descarga del YAML
-realmente usado y la metadata. No lee la configuracion actual del disco para
-describir un calculo anterior.
+este seleccionado otro modo de coste. Resume los datos del TFM, los supuestos
+electricos y contractuales, la formula Som y la leyenda de todos sus terminos,
+distinguiendo valores publicados, derivados y supuestos. La cobertura, fuentes
+y peajes por periodo quedan en una seccion desplegable. No muestra comandos,
+YAML, JSON, hashes ni metadatos tecnicos. La informacion se toma de la ejecucion
+publicada, no de la configuracion actual del disco.
 
 Antes de probar mediante SSM, publicar el caso con el comando `--config ... --s3`
 anterior y reiniciar la app con el codigo actualizado. En EC2, mantener
