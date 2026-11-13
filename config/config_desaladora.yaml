@@ -2,7 +2,7 @@
 # Cada parámetro lleva: value, source_type (documented | derived | hypothesis) y nota.
 # Simulación académica: NO representa una planta, contrato ni factura reales.
 version_config: 1
-
+ 
 caso:
   nombre:
     value: "desaladora_tfm_sevilla"
@@ -11,7 +11,7 @@ caso:
     value: "ahorro economico simulado antes de impuestos"
     source_type: documented
     nota: "Nunca llamarlo ahorro de factura."
-
+ 
 planta:
   volumen_m3_dia:
     value: 50000
@@ -28,7 +28,7 @@ planta:
     value: 365
     source_type: hypothesis
     nota: "Plena produccion todo el año"
-
+ 
 carga_flexible:
   energia_diaria_mwh:
     value: 30
@@ -38,7 +38,7 @@ carga_flexible:
     value: 7
     source_type: hypothesis
     nota: "Equivale a 7 MW medios; viabilidad depende de potencia contratada (no disponible)"
-
+ 
 baseline_s0:
   mwh_hora:
     value: 2.5
@@ -50,7 +50,7 @@ baseline_s0:
     value: 20
     source_type: hypothesis
     nota: "Hasta las 20:00 sin incluir la hora que empieza a las 20:00"
-
+ 
 optimizacion_s1:
   franja_preferente_inicio:
     value: 8
@@ -73,7 +73,7 @@ optimizacion_s1:
   deposito_agua_mwh_equivalente:
     value: null
     source_type: hypothesis
-
+ 
 mercado:
   fuente:
     value: "REData"
@@ -94,7 +94,7 @@ mercado:
   fecha_fin:
     value: "2026-09-30"
     source_type: documented
-
+ 
 # tarifa.acceso y tarifa.anio_regulatorio ELIGEN que datos regulados se usan: se leen del bloque
 # tarifas_reguladas (mas abajo). Para otro año u otra tarifa basta con añadir su bloque de datos.
 tarifa:
@@ -112,7 +112,9 @@ tarifa:
     value: 4
     source_type: documented
     nota: "Para 6.2TD es el segmento 4, no el 5"
-
+ 
+# Interruptores del modelo "spot_mas_regulado" (lo de hoy). Con contrato.modelo_precio = som_indexada_6_2td
+# el precio horario sale de contrato.formula y los peajes y cargos van DENTRO: no se suman aparte.
 componentes:
   spot:
     value: true
@@ -149,7 +151,67 @@ componentes:
     value: false
     source_type: hypothesis
     nota: "Fuera de alcance"
-
+ 
+# Modelo de precio de la energia (contrato de referencia: tarifa indexada 6.2TD de Som Energia).
+# PH = factor_global * [(PHM + Pc + Sc + Dsv + GdO + POsOm) * (1 + Perd) + FE + F] + PTD + CA
+# PHM = spot de REData (comprobar que es el precio OMIE); PTD y CA salen de tarifas_reguladas.
+# Terminos con value null = NO modelados (valen 0): no es que no existan, falta su valor.
+contrato:
+  modelo_precio:
+    value: "som_indexada_6_2td"      # alternativa: "spot_mas_regulado" (lo de hoy)
+    source_type: hypothesis
+    nota: "Tarifa publicada, no contrato firmado con la desaladora"
+  fase_modelo:
+    value: 1                         # 1 = PHM+PTD+CA · 2 = +perdidas y adquisicion · 3 = completa
+    source_type: hypothesis
+  fases:
+    value:
+      2: [perdidas, pagos_capacidad_eur_mwh, sobrecostes_eur_mwh, posom_eur_mwh, fondo_eficiencia_eur_mwh]
+      3: [desvios_eur_mwh, factor_desvio, garantias_origen_eur_mwh, margen_f_eur_mwh]
+    source_type: hypothesis
+    nota: "Terminos que deben tener valor para usar cada fase (la 1 no necesita ninguno). Reparto propuesto, a validar con el equipo"
+  formula:
+    factor_global:
+      value: 1.015
+      source_type: documented
+      nota: "Aparece en la formula publicada de Som Energia; ninguna fuente lo explica"
+    pagos_capacidad_eur_mwh:
+      value: null
+      source_type: hypothesis
+      nota: "Pc. Los publica el Ministerio cada año, por tarifa de acceso y periodo"
+    sobrecostes_eur_mwh:
+      value: null
+      source_type: hypothesis
+      nota: "Sc. Sobrecostes de gestion de la red publicados por REE"
+    desvios_eur_mwh:
+      value: null
+      source_type: hypothesis
+      nota: "Dsv = [1/2 (CoDsvSu + CoDsvBa) + BS3 + RAD3] x factor_desvio (series de REE)"
+    factor_desvio:
+      value: null
+      source_type: hypothesis
+      nota: "Factor propio de Som Energia, actualizado trimestralmente"
+    garantias_origen_eur_mwh:
+      value: null
+      source_type: hypothesis
+      nota: "GdO. Valor publicado por Som Energia, trimestral"
+    posom_eur_mwh:
+      value: null
+      source_type: hypothesis
+      nota: "POsOm. Costes regulados de REE y OMIE (CNMC)"
+    fondo_eficiencia_eur_mwh:
+      value: null
+      source_type: hypothesis
+      nota: "FE. Aportacion al Fondo Nacional de Eficiencia Energetica (Ministerio)"
+    margen_f_eur_mwh:
+      value: null
+      source_type: hypothesis
+      nota: "F. Margen de la cooperativa; en 6.2TD la contratacion es individualizada"
+  liquidacion_precio_negativo:
+    value: "sin_suelo"               # o "suelo_cero"
+    source_type: hypothesis
+    nota: "No se ha encontrado como liquida Som Energia los importes horarios negativos en 6.2TD; calcular ambos como sensibilidad"
+ 
 # Datos regulados por tarifa y año. Fuente unica: src/tarifas_6_2td.py solo los lee de aqui.
 tarifas_reguladas:
   6.2TD:
@@ -178,6 +240,10 @@ tarifas_reguladas:
           12: [P1, P2]
         source_type: documented
         nota: "Temporada peninsular por mes -> [periodo en horas punta, periodo en horas llano]"
+    perdidas_reguladas_fraccion:
+      value: {P1: 0.052, P2: 0.054, P3: 0.049, P4: 0.050, P5: 0.035, P6: 0.054}
+      source_type: documented
+      nota: "Circular 3/2020 CNMC, art. 11 (segun el documento regulatorio del equipo). Som aplica ademas un factor corrector horario de REE: aqui es solo una aproximacion"
     anios:
       # 2025: pendiente (peajes: Resolucion CNMC 4/12/2024; cargos 2025). Sin este bloque no se
       # calculan peajes ni cargos para fechas de 2025 (no se mezclan años).
