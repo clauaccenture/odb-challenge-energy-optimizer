@@ -4,6 +4,167 @@
 
 Energy Optimizer analiza cómo reducir el coste de la carga eléctrica flexible de una planta industrial desplazando el consumo hacia las horas de menor precio, sin reducir la energía consumida.
 
+### Backend de demo: desaladora y contrato indexado de referencia
+
+El modo optativo `--config` de [03_gold_redata.py](notebooks/03_gold_redata.py)
+lee [config_desaladora.yaml](config/config_desaladora.yaml) y calcula un escenario
+separado con la formula publicada de Som Energia. **No es una oferta 6.2TD, contrato
+firmado, factura real ni validacion de la flexibilidad de una planta.**
+El modo Gold habitual conserva su comportamiento. El frontend permite elegir
+**Desaladora · Som Energia (simulado)** sin sustituir las comparativas anteriores.
+
+Para desarrollar en el PC sin descargar datos de S3, usar las pruebas sinteticas
+(S3 simulado, sin conexiones AWS). Desde la raiz, con el entorno virtual activado,
+ejecutar los comandos uno a uno. En Windows:
+
+```powershell
+python -m pip install -r requirements.txt
+python -m pip install pytest
+python -m pytest src\tests\test_config_loader.py src\tests\test_tarifas_6_2td.py notebooks\tests\test_gold_redata_peajes.py -q
+```
+
+En Linux/EC2, despues de actualizar el codigo y activar el entorno, el modo `--s3`
+lee el Silver publicado y escribe los resultados directamente en S3, en memoria,
+**sin descargar ni guardar ficheros de datos en disco**:
+
+```bash
+python -m pip install -r requirements.txt
+export S3_BUCKET="energy-optimizer-grupo4"
+export REDATA_S3_PREFIX="redata"
+python notebooks/03_gold_redata.py --config config/config_desaladora.yaml --s3
+```
+
+Cambiar bucket/prefijo si la publicacion Silver utiliza otra ubicacion. Se lee
+exactamente `s3://S3_BUCKET/processed/REDATA_S3_PREFIX/precios_horarios.json`,
+sin alternativa local si falta el objeto o los permisos. El YAML del caso sigue
+versionado en el repositorio. La ventana elegida en ese YAML se aplica sobre los
+datos publicados: no se inventan precios ni se enumeran todos los objetos del bucket.
+
+Silver contiene la media de cuatro precios cuartohorarios para cada hora real.
+No se repiten llamadas a REData ni se vuelve a truncar el spot negativo.
+Es una aproximacion horaria, no una replica de la liquidacion cuartohoraria del contrato.
+
+**Precio marginal utilizado tanto para S0 como para optimizar S1 (EUR/MWh):**
+
+```text
+PH = 1.015 * [(spot + Pc + Sc + Dsv + GdO + POsOm) * (1 + Perd) + FE + F] + PTD + CA
+```
+
+PTD y CA se incorporan una sola vez. Los importes y el calendario 6.2TD se leen
+del bloque `tarifas_reguladas` de [config_desaladora.yaml](config/config_desaladora.yaml)
+mediante [tarifas_6_2td.py](src/tarifas_6_2td.py). El bloque `contrato` conserva
+el modelo Som completo de la demo, no el modelo preliminar por fases.
+Las perdidas del calculo Som siguen siendo el coeficiente supuesto de
+`contrato.perdidas_fraccion`, no la tabla de perdidas reguladas por periodo.
+A diferencia del modo Gold anterior, el caso reoptimiza con PH, no solo con el spot.
+
+| Dato | Tratamiento en la demo |
+|---|---|
+| Formula y factor 1.015 | Publicados por Som Energia; este factor no es IVA ni IEE. |
+| Peajes/cargos y calendario | Referencias regulatorias 2026 del modulo de tarifas. |
+| GdO T1/T2/T3/T4 | 0.650 / 0.965 / 1.405 / 1.690 EUR/MWh, segun el historico titulado «sin impuestos». La aplicacion a este contrato simulado y el criterio fiscal se declaran como hipotesis. |
+| F | 16 EUR/MWh: extrapolacion del precio publico de 6.1TD, no oferta confirmada 6.2TD. |
+| Pc / Sc / Dsv / POsOm / FE | 0.5 / 10 / 2 / 0.2 / 2 EUR/MWh: constantes ilustrativas, **no series oficiales ni estimaciones calibradas**. Dsv no es un recargo del 14 % sobre el spot. |
+| Perd | 4 % constante supuesto, no coeficientes reales de perdidas REE. |
+| Precios negativos | Spot y PH se conservan; una liquidacion PH negativa es una hipotesis, no una condicion contractual confirmada. |
+| Operacion | 150 MWh/dia estimados: 30 flexibles y 120 no flexibles. Los 120 se reparten uniformemente entre las 23/24/25 horas del dia. No es una curva medida. |
+| Potencia | 12.5 MW supuestos en cada P1-P6, como limite de potencia media horaria de la planta completa. No se calculan importes de potencia, excesos cuartohorarios ni picos dentro de la hora. |
+
+El balance agregado respeta la energia y la potencia media supuestas; **no prueba
+que membranas, bombas, produccion de agua o almacenamiento permitan esa operacion**.
+No se ejecuta una programacion con restricciones de rampa, arranque o deposito:
+si se activan en el YAML, el backend falla explicitamente en vez de ignorarlas.
+Esas restricciones necesitaran un modelo operativo LP/MILP segun corresponda.
+Tampoco se aceptan otros anos/tarifas, impuestos o componentes no implementados.
+
+Por defecto `fecha_inicio` y `fecha_fin` son `null`: se toma **toda la cobertura
+Silver disponible dentro de la vigencia tarifaria 2026**, incluyendo noviembre
+y diciembre si estan publicados. No hay un corte fijo en septiembre ni octubre.
+Se pueden fijar fechas expresamente para un ensayo acotado. Las horas de otros
+anos no se valoran con tarifas 2026: se informa de cuantas se excluyen en consola
+y en `metadata.json`. Para incluirlas con tarifa hacen falta importes y calendario
+de su ano correspondiente.
+No se anualizan resultados. Las fechas ausentes o incompletas se registran en el
+resumen diario sin ahorro ficticio; un mes sin dias validos tiene costes nulos
+(no cero). Los duplicados y precios no finitos provocan error.
+
+La salida S3, independiente del Gold anterior, se guarda por ejecucion bajo
+`outputs/desaladora_som_energia/runs/<id>/`:
+
+- `programacion_horaria.parquet`: timestamps UTC y locales con desfase, spot,
+  componentes de PH, precio indexado, consumos S0/S1 flexibles y totales de planta,
+  potencia supuesta y costes del **termino de energia antes de impuestos**.
+- `resumen_diario.parquet` y `resumen_mensual.parquet`: costes de energia, ahorro y
+  cobertura; el coste no flexible es identico en S0/S1 y no genera ahorro.
+- `metadata.json`: YAML completo con notas/fuentes, clasificacion
+  `documented`/`hypothesis`/`derived`, huellas SHA-256 de configuracion, Silver y
+  resultados, vigencia de tarifas y cobertura. Los parametros calculados (precio,
+  consumo no flexible y costes) son derivados, no mediciones.
+
+`outputs/desaladora_som_energia/latest.json` apunta al `metadata.json` de la ultima
+ejecucion publicada correctamente. Ese metadata identifica las claves exactas y
+huellas de sus tres Parquet, el origen Silver y su VersionId si el bucket lo ofrece.
+El puntero se actualiza **solo despues** de subir todos los resultados: un fallo
+de calculo/subida no publica una mezcla de ejecuciones. Un fallo de subida puede
+dejar una ejecucion parcial sin referenciar, que debe limpiarse posteriormente.
+El dashboard resuelve este puntero una vez y lee solo esas claves, comprobando
+las huellas y la coherencia de los resultados.
+El rol IAM necesita `s3:GetObject` sobre el Silver y `s3:PutObject` sobre
+`outputs/desaladora_som_energia/*` (y permisos KMS si el bucket los requiere).
+
+No sobrescribe los Parquet anteriores. No se incluye la factura completa:
+potencia fija, excesos, reactiva, alquiler,
+bono social, IVA e IEE estan fuera.
+
+### Frontend del caso desaladora
+
+En las tres vistas de resultados, seleccionar **Desaladora · Som Energia
+(simulado)** para consultar costes y ahorro de la carga flexible reoptimizada
+con PH. La programacion diaria muestra una tabla HTML con las 23/24/25 horas,
+el precio Som completo y las horas programadas en verde: en este caso,
+4 horas de 7 MWh y 1 hora de 2 MWh. Al pulsar una fila se resalta y se
+actualizan debajo la formula numerica y el desglose de precio de esa hora.
+Las horas repetidas se identifican por UTC y su zona local, sin confundirlas.
+Los costes S0/S1 y ahorro se resumen en una tarjeta del dia, solo para la carga
+flexible; no se muestran costes de la planta completa. El desglose de energia
+queda plegado como detalle opcional. El CSV tiene siete columnas con hora,
+precio indexado, carga S0/S1, coste S0/S1 y ahorro. Conserva todas las horas
+del dia para cuadrar los totales; no cambia el plan calculado en Gold.
+
+La cuarta vista, **Caso desaladora**, utiliza siempre la ejecucion Som, aunque
+este seleccionado otro modo de coste. Resume los datos del TFM, los supuestos
+electricos y contractuales, la formula Som y la leyenda de todos sus terminos,
+distinguiendo valores publicados, derivados y supuestos. La cobertura, fuentes
+y peajes por periodo quedan en una seccion desplegable. No muestra comandos,
+YAML, JSON, hashes ni metadatos tecnicos. La informacion se toma de la ejecucion
+publicada, no de la configuracion actual del disco.
+
+Antes de probar mediante SSM, publicar el caso con el comando `--config ... --s3`
+anterior y reiniciar la app con el codigo actualizado. En EC2, mantener
+`S3_BUCKET` configurado tambien al iniciar Streamlit; pulsar **Actualizar datos
+de S3** tras una nueva publicacion. El rol del dashboard necesita `s3:GetObject`
+sobre `outputs/desaladora_som_energia/*`. El front no ejecuta el optimizador,
+no escribe en S3 y no recurre a datos locales si falta la publicacion.
+Detalles de acceso y pruebas en [app/README.md](app/README.md).
+
+Para una ejecucion local voluntaria, `--config ... --no-s3` conserva la lectura
+de `data/processed/redata/precios_horarios.json` y escribe en
+`data/outputs/desaladora_som_energia/`. No es necesario para las pruebas del PC.
+Los modos `--s3` y `--no-s3` son mutuamente excluyentes; el caso exige elegir uno.
+El Gold anterior, sin `--config`, conserva sus opciones y comportamiento.
+
+Fuentes consultadas el 12/11/2026:
+[formula](https://www.somenergia.coop/es/servicios/como-calculamos-el-precio),
+[historico de GdO](https://www.somenergia.coop/es/historico-tarifa-indexada),
+[referencia comercial 6.1TD](https://www.somenergia.coop/es/tarifas-luz/altatension-indexada)
+y [condiciones de alta tension](https://es.support.somenergia.coop/article/1343-tarifas-de-alta-tension-6-1td-6-2td-6-3td-y-6-4td-indexadas).
+
+Pruebas del caso y regresion del backend (el runner `pytest` es dependencia de desarrollo):
+
+```text
+python -m pytest src/tests/test_config_loader.py src/tests/test_tarifas_6_2td.py notebooks/tests/test_gold_redata_peajes.py -q
+```
+
 ## 1. Problema y decisión
 
 Una planta industrial compra electricidad indexada al precio del mercado diario y dispone de **30 MWh/día de carga flexible** que puede desplazarse dentro del mismo día.

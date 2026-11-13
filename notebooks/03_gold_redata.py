@@ -39,12 +39,21 @@ Los precios vienen de la API (via silver); los consumos son el escenario del ret
 Uso (desde la raiz del repo):
     python notebooks/03_gold_redata.py
     python notebooks/03_gold_redata.py --no-s3
+    python notebooks/03_gold_redata.py --config config/config_desaladora.yaml --no-s3
+    python notebooks/03_gold_redata.py --config config/config_desaladora.yaml --s3
+    El modo --config genera un caso Som Energia separado, local o S3, sin cambiar
+    las tablas Gold existentes ni el contrato del dashboard. --s3 no usa datos en disco.
 """
 import argparse
+from contextlib import closing
+from datetime import datetime, timezone
+import hashlib
+from io import BytesIO
 import json
 import os
 import sys
 from pathlib import Path
+from uuid import uuid4
  
 import pandas as pd
 from dotenv import load_dotenv
@@ -56,6 +65,8 @@ from src.tarifas_6_2td import (  # noqa: E402
     PEAJES_ENERGIA_EUR_MWH,
     periodo_6_2td,
 )
+from src.config_loader import cargar_config  # noqa: E402
+from src.desaladora import asignar_carga, build_desaladora, validar_config  # noqa: E402
  
 load_dotenv()
 
@@ -64,6 +75,8 @@ BUCKET = os.getenv("S3_BUCKET")
 REDATA_S3_PREFIX = os.getenv("REDATA_S3_PREFIX", "redata").strip("/")
 SILVER = Path("data/processed/redata/precios_horarios.json")
 OUT_DIR = Path("data/outputs/redata")
+OUT_DIR_DESALADORA = Path("data/outputs/desaladora_som_energia")
+S3_PREFIX_DESALADORA = "outputs/desaladora_som_energia"
 SPOT_TITLE = "Precio mercado spot"
 TZ_LOCAL = "Europe/Madrid"
  
@@ -83,7 +96,11 @@ HORAS_VALIDAS = (23, 24, 25)  # 24 normal; 23 en primavera; 25 en otono
  
 def load_silver(path: Path) -> pd.DataFrame:
     """Lee el JSON silver y devuelve (datetime_utc, datetime_local, fecha_local, precio)."""
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    return parse_silver(json.loads(path.read_text(encoding="utf-8")))
+
+
+def parse_silver(payload: dict) -> pd.DataFrame:
+    """Interpreta el mismo contrato Silver desde disco o desde memoria/S3."""
     serie = next(s for s in payload["included"] if s["attributes"]["title"] == SPOT_TITLE)
     df = pd.DataFrame(serie["attributes"]["values"]).rename(columns={"value": "precio_eur_mwh"})
     df["datetime_utc"] = pd.to_datetime(df["datetime"], utc=True)
@@ -99,27 +116,10 @@ def plan_dia(dia: pd.DataFrame) -> pd.DataFrame:
     en_baseline = dia["datetime_local"].dt.hour.between(BASELINE_HORA_INICIO, BASELINE_HORA_FIN - 1)
     dia["consumo_baseline_mwh"] = BASELINE_MWH_HORA * en_baseline.astype(float)
  
-    # Orden de llenado, de la hora mas barata a la mas cara:
-    #   1) precio mas bajo
-    #   2) en empate de precio, primero la hora que cae en la franja 08:00-17:00
-    #   3) si aun empatan, la mas temprana (resultado reproducible)
-    en_franja = dia["datetime_local"].dt.hour.between(FRANJA_PREFERENTE_INICIO, FRANJA_PREFERENTE_FIN - 1)
-    orden = (
-        dia.assign(fuera_franja=~en_franja)
-        .sort_values(["precio_eur_mwh", "fuera_franja", "datetime_utc"])
-        .index
+    dia["consumo_optimizado_mwh"] = asignar_carga(
+        dia, ENERGIA_DIARIA_MWH, pd.Series(LIMITE_MWH_HORA, index=dia.index),
+        "precio_eur_mwh", FRANJA_PREFERENTE_INICIO, FRANJA_PREFERENTE_FIN,
     )
- 
-    # Reparto en franjas de 7 MWh (7 + 7 + 7 + 7 + 2 con 30 MWh y limite de 7)
-    asignado = pd.Series(0.0, index=dia.index)
-    restante = ENERGIA_DIARIA_MWH
-    for idx in orden:
-        x = min(LIMITE_MWH_HORA, restante)
-        asignado[idx] = x
-        restante -= x
-        if restante <= 0:
-            break
-    dia["consumo_optimizado_mwh"] = asignado
     return dia
 
 
@@ -253,11 +253,115 @@ def upload_s3(path: Path) -> None:
     print(f"  subido a s3://{BUCKET}/{key}")
  
  
+def ejecutar_desaladora(config_path: Path, usar_s3: bool) -> None:
+    cfg, tipos = cargar_config(config_path)
+    validar_config(cfg)
+    cliente = None
+    silver_version = None
+    if usar_s3:
+        import boto3
+
+        if not BUCKET or not BUCKET.strip():
+            raise ValueError("El modo --s3 necesita S3_BUCKET; no usara datos locales.")
+        if not REDATA_S3_PREFIX or not REDATA_S3_PREFIX.strip():
+            raise ValueError("REDATA_S3_PREFIX debe identificar el Silver publicado.")
+        cliente = boto3.client("s3")
+        key = f"processed/{REDATA_S3_PREFIX}/precios_horarios.json"
+        response = cliente.get_object(Bucket=BUCKET, Key=key)
+        with closing(response["Body"]) as body:
+            silver_bytes = body.read()
+        origen = f"s3://{BUCKET}/{key}"
+        silver_version = response.get("VersionId")
+    else:
+        silver_bytes = SILVER.read_bytes()
+        origen = str(SILVER)
+    silver = parse_silver(json.loads(silver_bytes))
+    fuera_vigencia = int(silver["datetime_local"].dt.year.ne(ANIO_TARIFAS).sum())
+    plan, resumen, mensual = build_desaladora(silver, cfg)
+    archivos: dict[str, bytes] = {}
+    for nombre, tabla in {
+        "programacion_horaria.parquet": plan,
+        "resumen_diario.parquet": resumen,
+        "resumen_mensual.parquet": mensual,
+    }.items():
+        with BytesIO() as buffer:
+            tabla.to_parquet(buffer, index=False)
+            archivos[nombre] = buffer.getvalue()
+    metadata = {
+        "schema": "desaladora_som_energia_v1",
+        "generado_utc": datetime.now(timezone.utc).isoformat(),
+        "es_simulacion": True,
+        "alcance": "termino de energia antes de impuestos; NO factura ni oferta comercial",
+        "resultados_source_type": "derived",
+        "formulacion": "optimo del modelo agregado; flexibilidad no validada en planta",
+        "criterio_optimizacion": "precio_indexado_eur_mwh",
+        "resolucion": cfg["contrato"]["resolucion"],
+        "config_yaml": config_path.read_bytes().decode("utf-8"),
+        "config_sha256": hashlib.sha256(config_path.read_bytes()).hexdigest(),
+        "silver_sha256": hashlib.sha256(silver_bytes).hexdigest(),
+        "silver_origen": origen,
+        "silver_version_id": silver_version,
+        "horas_silver_fuera_vigencia_tarifa": fuera_vigencia,
+        "tarifa": {
+            "anio": ANIO_TARIFAS, "peajes_eur_mwh": PEAJES_ENERGIA_EUR_MWH,
+            "cargos_eur_mwh": CARGOS_ENERGIA_EUR_MWH,
+        },
+        "source_types": tipos,
+        "hipotesis": sorted(k for k, v in tipos.items() if v == "hypothesis"),
+        "dias_esperados": len(resumen),
+        "dias_optimos": int(resumen["estado_optimizacion"].eq("optimo").sum()),
+        "fecha_primera_programacion": str(plan["fecha_local"].min()),
+        "fecha_ultima_programacion": str(plan["fecha_local"].max()),
+        "outputs_sha256": {
+            nombre: hashlib.sha256(contenido).hexdigest() for nombre, contenido in archivos.items()
+        },
+    }
+    prefijo = f"{S3_PREFIX_DESALADORA}/runs/{uuid4().hex}"
+    if cliente is not None:
+        metadata["outputs_s3"] = {nombre: f"{prefijo}/{nombre}" for nombre in archivos}
+    archivos["metadata.json"] = json.dumps(
+        metadata, ensure_ascii=False, indent=2, allow_nan=False
+    ).encode("utf-8")
+    if cliente is not None:
+        for nombre, contenido in archivos.items():
+            cliente.put_object(
+                Bucket=BUCKET, Key=f"{prefijo}/{nombre}", Body=contenido,
+                ContentType="application/json" if nombre.endswith(".json") else "application/octet-stream",
+            )
+        # Publicar el puntero solo cuando la ejecucion completa ya esta en S3.
+        cliente.put_object(
+            Bucket=BUCKET, Key=f"{S3_PREFIX_DESALADORA}/latest.json",
+            Body=json.dumps({"metadata_key": f"{prefijo}/metadata.json"}).encode("utf-8"),
+            ContentType="application/json",
+        )
+        destino = f"s3://{BUCKET}/{prefijo}/"
+    else:
+        OUT_DIR_DESALADORA.mkdir(parents=True, exist_ok=True)
+        for nombre, contenido in archivos.items():
+            (OUT_DIR_DESALADORA / nombre).write_bytes(contenido)
+        destino = str(OUT_DIR_DESALADORA)
+    print("AVISO: simulacion horaria con costes supuestos; no factura ni oferta Som Energia.")
+    if fuera_vigencia:
+        print(f"AVISO: {fuera_vigencia} horas Silver fuera de la tarifa {ANIO_TARIFAS}; no se han modelizado.")
+    print(f"Dias optimos: {metadata['dias_optimos']}/{len(resumen)} | "
+          f"ahorro de energia simulado: {resumen['ahorro_energia_eur'].sum():.2f} EUR")
+    print(f"Guardado en {destino}; Gold original sin cambios.")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--no-s3", action="store_true", help="solo local")
+    modo = ap.add_mutually_exclusive_group()
+    modo.add_argument("--no-s3", action="store_true", help="solo local")
+    modo.add_argument("--s3", action="store_true", help="caso desaladora: entrada y salida S3, sin datos en disco")
+    ap.add_argument("--config", type=Path, help="caso desaladora Som Energia; elegir --s3 o --no-s3")
     args = ap.parse_args()
- 
+    if args.s3 and not args.config:
+        ap.error("--s3 requiere --config; el Gold anterior conserva su flujo habitual.")
+    if args.config and not (args.s3 or args.no_s3):
+        ap.error("Elige explicitamente --s3 (EC2, sin datos en disco) o --no-s3 (local).")
+    if args.config:
+        ejecutar_desaladora(args.config, args.s3)
+        return
     if not SILVER.exists():
         raise FileNotFoundError(f"No existe {SILVER}. Ejecuta antes 02_calidad_redata.py")
     plan, resumen = build_gold(load_silver(SILVER))

@@ -1,7 +1,7 @@
 # Configuración del caso "desaladora" (referencia: TFM Univ. de Sevilla, 50.000 m3/dia, 66 kV).
 # Cada parámetro lleva: value, source_type (documented | derived | hypothesis) y nota.
 # Simulación académica: NO representa una planta, contrato ni factura reales.
-version_config: 1
+version_config: 2
  
 caso:
   nombre:
@@ -89,11 +89,13 @@ mercado:
     source_type: documented
     nota: "Mismo termino que 03_gold. El spot negativo permanece negativo (no clip, no max(precio,0))"
   fecha_inicio:
-    value: "2025-10-01"
-    source_type: documented
+    value: null
+    source_type: hypothesis
+    nota: "null = primera fecha Silver disponible dentro de la vigencia de la tarifa."
   fecha_fin:
-    value: "2026-09-30"
-    source_type: documented
+    value: null
+    source_type: hypothesis
+    nota: "null = ultima fecha Silver disponible con tarifa; sin corte en septiembre u octubre."
  
 # tarifa.acceso y tarifa.anio_regulatorio ELIGEN que datos regulados se usan: se leen del bloque
 # tarifas_reguladas (mas abajo). Para otro año u otra tarifa basta con añadir su bloque de datos.
@@ -113,8 +115,7 @@ tarifa:
     source_type: documented
     nota: "Para 6.2TD es el segmento 4, no el 5"
  
-# Interruptores del modelo "spot_mas_regulado" (lo de hoy). Con contrato.modelo_precio = som_indexada_6_2td
-# el precio horario sale de contrato.formula y los peajes y cargos van DENTRO: no se suman aparte.
+# Componentes del precio indexado de la demo; peajes y cargos se incluyen una sola vez.
 componentes:
   spot:
     value: true
@@ -126,21 +127,9 @@ componentes:
     value: true
     source_type: documented
   perdidas:
-    value: false
+    value: true
     source_type: hypothesis
-    nota: "Desactivado: depende del contrato (no existe)"
-  margen_comercial_eur_mwh:
-    value: 0
-    source_type: hypothesis
-    nota: "No modelado por falta de contrato (aqui encaja la formula de la comercializadora)"
-  desvios_eur_mwh:
-    value: 0
-    source_type: hypothesis
-    nota: "No modelado por falta de contrato"
-  otros_costes_eur_mwh:
-    value: 0
-    source_type: hypothesis
-    nota: "No modelado por falta de contrato"
+    nota: "Coeficiente constante de demo, no serie regulada de REE."
   iee:
     value: false
     source_type: hypothesis
@@ -151,66 +140,6 @@ componentes:
     value: false
     source_type: hypothesis
     nota: "Fuera de alcance"
- 
-# Modelo de precio de la energia (contrato de referencia: tarifa indexada 6.2TD de Som Energia).
-# PH = factor_global * [(PHM + Pc + Sc + Dsv + GdO + POsOm) * (1 + Perd) + FE + F] + PTD + CA
-# PHM = spot de REData (comprobar que es el precio OMIE); PTD y CA salen de tarifas_reguladas.
-# Terminos con value null = NO modelados (valen 0): no es que no existan, falta su valor.
-contrato:
-  modelo_precio:
-    value: "som_indexada_6_2td"      # alternativa: "spot_mas_regulado" (lo de hoy)
-    source_type: hypothesis
-    nota: "Tarifa publicada, no contrato firmado con la desaladora"
-  fase_modelo:
-    value: 1                         # 1 = PHM+PTD+CA · 2 = +perdidas y adquisicion · 3 = completa
-    source_type: hypothesis
-  fases:
-    value:
-      2: [perdidas, pagos_capacidad_eur_mwh, sobrecostes_eur_mwh, posom_eur_mwh, fondo_eficiencia_eur_mwh]
-      3: [desvios_eur_mwh, factor_desvio, garantias_origen_eur_mwh, margen_f_eur_mwh]
-    source_type: hypothesis
-    nota: "Terminos que deben tener valor para usar cada fase (la 1 no necesita ninguno). Reparto propuesto, a validar con el equipo"
-  formula:
-    factor_global:
-      value: 1.015
-      source_type: documented
-      nota: "Aparece en la formula publicada de Som Energia; ninguna fuente lo explica"
-    pagos_capacidad_eur_mwh:
-      value: null
-      source_type: hypothesis
-      nota: "Pc. Los publica el Ministerio cada año, por tarifa de acceso y periodo"
-    sobrecostes_eur_mwh:
-      value: null
-      source_type: hypothesis
-      nota: "Sc. Sobrecostes de gestion de la red publicados por REE"
-    desvios_eur_mwh:
-      value: null
-      source_type: hypothesis
-      nota: "Dsv = [1/2 (CoDsvSu + CoDsvBa) + BS3 + RAD3] x factor_desvio (series de REE)"
-    factor_desvio:
-      value: null
-      source_type: hypothesis
-      nota: "Factor propio de Som Energia, actualizado trimestralmente"
-    garantias_origen_eur_mwh:
-      value: null
-      source_type: hypothesis
-      nota: "GdO. Valor publicado por Som Energia, trimestral"
-    posom_eur_mwh:
-      value: null
-      source_type: hypothesis
-      nota: "POsOm. Costes regulados de REE y OMIE (CNMC)"
-    fondo_eficiencia_eur_mwh:
-      value: null
-      source_type: hypothesis
-      nota: "FE. Aportacion al Fondo Nacional de Eficiencia Energetica (Ministerio)"
-    margen_f_eur_mwh:
-      value: null
-      source_type: hypothesis
-      nota: "F. Margen de la cooperativa; en 6.2TD la contratacion es individualizada"
-  liquidacion_precio_negativo:
-    value: "sin_suelo"               # o "suelo_cero"
-    source_type: hypothesis
-    nota: "No se ha encontrado como liquida Som Energia los importes horarios negativos en 6.2TD; calcular ambos como sensibilidad"
  
 # Datos regulados por tarifa y año. Fuente unica: src/tarifas_6_2td.py solo los lee de aqui.
 tarifas_reguladas:
@@ -260,3 +189,94 @@ tarifas_reguladas:
           value: [2026-01-01, 2026-01-06, 2026-05-01, 2026-08-15, 2026-10-12, 2026-11-01, 2026-12-06, 2026-12-08, 2026-12-25]
           source_type: documented
           nota: "Fecha fija y no sustituibles, mas el 6 de enero. Sin Viernes Santo (no tiene fecha fija). Sabados, domingos y festivos: todo el dia P6"
+
+# Los importes estimados NO son una oferta de Som Energia ni estimaciones calibradas.
+# Todos los componentes monetarios se expresan en EUR/MWh, antes de impuestos.
+contrato:
+  modelo:
+    value: "som_energia_referencia_v1"
+    source_type: hypothesis
+    nota: "Formula publica; contrato ficticio, sin oferta individualizada 6.2TD."
+  resolucion:
+    value: "horaria_media_cuartohoraria"
+    source_type: hypothesis
+    nota: "Precio REData = media de cuatro cuartos; potencia constante dentro de cada hora."
+  liquidacion_negativos:
+    value: "sin_suelo_simulado"
+    source_type: hypothesis
+    nota: "Se conserva PH aunque sea negativo; NO confirma liquidacion contractual Som Energia."
+  factor_formula:
+    value: 1.015
+    source_type: documented
+    nota: "Factor de la formula publica; no es IVA ni IEE."
+  pc_eur_mwh:
+    value: 0.5
+    source_type: hypothesis
+    nota: "Constante ilustrativa, no valor regulado verificado."
+  sc_eur_mwh:
+    value: 10.0
+    source_type: hypothesis
+    nota: "Aproximacion constante de costes de red; no reproduce servicios de ajuste reales."
+  dsv_eur_mwh:
+    value: 2.0
+    source_type: hypothesis
+    nota: "Coste absoluto supuesto. NO es el 14 % publicado ni se aplica como porcentaje del spot."
+  posom_eur_mwh:
+    value: 0.2
+    source_type: hypothesis
+    nota: "Constante ilustrativa conjunta de operadores; no liquidacion oficial."
+  perdidas_fraccion:
+    value: 0.04
+    source_type: hypothesis
+    nota: "4 % ilustrativo; sustituir por coeficientes REE de 6.2TD para una replica contractual."
+  fe_eur_mwh:
+    value: 2.0
+    source_type: hypothesis
+    nota: "Aportacion ilustrativa; no obligacion individual confirmada de la comercializadora."
+  f_eur_mwh:
+    value: 16.0
+    source_type: hypothesis
+    nota: "Referencia publica 6.1TD de 0,016 EUR/kWh; extrapolada a 6.2TD, no oferta confirmada."
+  gdo_eur_mwh_por_trimestre:
+    t1:
+      value: 0.650
+      source_type: documented
+    t2:
+      value: 0.965
+      source_type: documented
+    t3:
+      value: 1.405
+      source_type: documented
+    t4:
+      value: 1.690
+      source_type: documented
+  criterio_gdo:
+    value: "historico_sin_impuestos"
+    source_type: hypothesis
+    nota: "Se adopta la tabla titulada sin impuestos; hay ambiguedad fiscal en otras paginas."
+
+operacion_demo:
+  perfil_no_flexible:
+    value: "uniforme_energia_diaria"
+    source_type: hypothesis
+    nota: "Consumo total estimado menos 30 MWh flexibles, repartido entre las 23/24/25 horas reales."
+  potencia_contratada_mw:
+    p1: {value: 12.5, source_type: hypothesis}
+    p2: {value: 12.5, source_type: hypothesis}
+    p3: {value: 12.5, source_type: hypothesis}
+    p4: {value: 12.5, source_type: hypothesis}
+    p5: {value: 12.5, source_type: hypothesis}
+    p6: {value: 12.5, source_type: hypothesis}
+  flexibilidad_validada_en_planta:
+    value: false
+    source_type: hypothesis
+    nota: "Carga agregada idealizada; no demuestra viabilidad de bombas, membranas ni deposito."
+
+fuentes_demo:
+  fecha_consulta: "2026-11-12"
+  formula: "https://www.somenergia.coop/es/servicios/como-calculamos-el-precio"
+  historico_gdo: "https://www.somenergia.coop/es/historico-tarifa-indexada"
+  referencia_f_6_1td: "https://www.somenergia.coop/es/tarifas-luz/altatension-indexada"
+  condiciones_6_2td: "https://es.support.somenergia.coop/article/1343-tarifas-de-alta-tension-6-1td-6-2td-6-3td-y-6-4td-indexadas"
+  peajes: "https://www.boe.es/buscar/doc.php?id=BOE-A-2025-26348"
+  cargos: "https://www.boe.es/buscar/doc.php?id=BOE-A-2025-26705"

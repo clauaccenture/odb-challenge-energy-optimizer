@@ -166,6 +166,30 @@ class GoldDashboardTests(unittest.TestCase):
         self.assertIn("periodo de estudio", app.warning[0].value)
         self.assertFalse(app.selectbox)
 
+    def test_tariff_mode_uses_s3_days_after_october_including_calendar(self) -> None:
+        gold = runpy.run_path(str(APP_DIR.parent / "notebooks" / "03_gold_redata.py"))
+        hours = pd.date_range("2026-11-12", periods=24, freq="h", tz="Europe/Madrid").append(
+            pd.date_range("2026-12-24", periods=24, freq="h", tz="Europe/Madrid")
+        )
+        self.plan, resumen = gold["build_gold"](pd.DataFrame({
+            "datetime_utc": hours.tz_convert("UTC"), "datetime_local": hours,
+            "fecha_local": hours.date, "precio_eur_mwh": 50.0,
+        }))
+        self.monthly = gold["build_mensual"](self.plan, resumen)
+        tables = self.load_tables()
+        monthly, summary, _ = data_loader.apply_tariff_scenario(*tables)
+        self.assertEqual(monthly["month"].tolist(), ["2026-11", "2026-12"])
+        self.assertEqual(summary["fecha_local"].max(), pd.Timestamp("2026-12-24").date())
+        app = self.run_app(tables, mode="tariff")
+        self.assertEqual(app.selectbox(key="summary_month").options, ["Noviembre 2026", "Diciembre 2026"])
+        app.radio(key="view").set_value("Programación diaria").run()
+        app.selectbox(key="schedule_month").set_value(pd.Timestamp("2026-12-01").date()).run()
+        self.assertFalse(app.button(key="schedule_day_2026-12-24").disabled)
+        self.assertTrue(app.button(key="schedule_day_2026-12-25").disabled)
+        app.button(key="schedule_day_2026-12-24").click().run()
+        self.assertEqual(list(app.exception), [])
+        self.assertEqual(app.session_state["selected_date"], pd.Timestamp("2026-12-24").date())
+
     def test_reads_real_gold_output_and_preserves_indicators(self) -> None:
         monthly, summary, plan = self.load_tables()
         self.assertEqual(monthly["month"].tolist(), ["2025-12", "2026-01", "2026-03", "2026-10"])
@@ -492,7 +516,8 @@ class GoldDashboardTests(unittest.TestCase):
             app = AppTest.from_file(str(APP_DIR / "streamlit_app.py")).run(timeout=20)
         self.assertEqual(list(app.exception), [])
         self.assertIn("tablas incompatibles", app.error[0].value)
-        self.assertFalse(app.radio)
+        self.assertFalse(app.selectbox)
+        self.assertTrue(any(button.label == "Actualizar datos de S3" for button in app.button))
 
 
 if __name__ == "__main__":

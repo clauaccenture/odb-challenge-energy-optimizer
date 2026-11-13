@@ -96,49 +96,29 @@ def test_restriccion_operativa_activa_exige_programacion_lineal(cargado):
     assert d["restricciones_operativas_activas"] == ["rampa_max_mwh_hora"]
  
  
-# ---- bloque contrato (modelo de precio Som Energia) ----
-TERMINOS_FORMULA = (
-    "factor_global", "pagos_capacidad_eur_mwh", "sobrecostes_eur_mwh", "desvios_eur_mwh",
-    "factor_desvio", "garantias_origen_eur_mwh", "posom_eur_mwh", "fondo_eficiencia_eur_mwh",
-    "margen_f_eur_mwh",
-)
- 
- 
-def test_contrato_valores_permitidos(cargado):
-    c = cargado[0]["contrato"]
-    assert c["modelo_precio"] in {"som_indexada_6_2td", "spot_mas_regulado"}
-    assert c["fase_modelo"] in {1, 2, 3}
-    assert c["liquidacion_precio_negativo"] in {"sin_suelo", "suelo_cero"}
- 
- 
-def test_contrato_define_todos_los_terminos_de_la_formula(cargado):
-    f = cargado[0]["contrato"]["formula"]
-    assert set(TERMINOS_FORMULA) <= set(f)
-    assert f["factor_global"] == 1.015
- 
- 
-def test_fase_elegida_tiene_valores_para_sus_terminos(cargado):
-    """No se puede subir fase_modelo sin haber rellenado los terminos que esa fase necesita."""
-    cfg = cargado[0]
-    c = cfg["contrato"]
-    reg = cfg["tarifas_reguladas"]["6.2TD"]
-    for fase, terminos in c["fases"].items():
-        if fase > c["fase_modelo"]:
-            continue
-        for t in terminos:
-            if t == "perdidas":
-                assert tuple(reg["perdidas_reguladas_fraccion"]) == PERIODOS
-            else:
-                assert c["formula"][t] is not None, f"fase {c['fase_modelo']} exige un valor para {t}"
- 
- 
-def test_terminos_de_fases_existen_en_la_formula(cargado):
-    c = cargado[0]["contrato"]
-    for terminos in c["fases"].values():
-        for t in terminos:
-            assert t == "perdidas" or t in c["formula"]
- 
- 
 def test_perdidas_reguladas_por_periodo(cargado):
     p = cargado[0]["tarifas_reguladas"]["6.2TD"]["perdidas_reguladas_fraccion"]
     assert tuple(p) == PERIODOS and all(0 < v < 0.1 for v in p.values())
+
+
+@pytest.mark.parametrize("ruta,valor", [
+    (("contrato", "perdidas_fraccion"), -0.01),
+    (("contrato", "sc_eur_mwh"), float("nan")),
+    (("carga_flexible", "limite_mwh_hora"), 0),
+    (("baseline_s0", "hora_fin"), 25),
+    (("mercado", "fecha_inicio"), "2025-12-31"),
+    (("componentes", "iva"), True),
+    (("optimizacion_s1", "rampa_max_mwh_hora"), 3),
+    (("operacion_demo", "potencia_contratada_mw", "p2"), 1),
+])
+def test_caso_rechaza_parametros_invalidos_o_no_soportados(cargado, ruta, valor):
+    import copy
+    from src.desaladora import validar_config
+
+    cfg = copy.deepcopy(cargado[0])
+    nodo = cfg
+    for clave in ruta[:-1]:
+        nodo = nodo[clave]
+    nodo[ruta[-1]] = valor
+    with pytest.raises(ValueError):
+        validar_config(cfg)
