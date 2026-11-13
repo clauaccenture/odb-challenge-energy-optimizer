@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-S3_BUCKET = "energy-optimizer-grupo4"
+S3_BUCKET = os.getenv("S3_BUCKET", "energy-optimizer-grupo4")
 # Same variable as notebooks 02/03; selects outputs/<prefix>/ (default outputs/redata).
 S3_PREFIX = f"outputs/{os.getenv('REDATA_S3_PREFIX', 'redata').strip('/')}"
 S3_REGION = "eu-north-1"
@@ -48,9 +48,6 @@ TARIFF_HOURLY_NUMERIC = [
 	"coste_total_baseline_eur", "coste_total_optimizado_eur",
 ]
 TARIFF_PERIODS = {"P1", "P2", "P3", "P4", "P5", "P6"}
-# Academic case study window for the 6.2TD view.
-STUDY_START = date(2026, 1, 1)
-STUDY_END = date(2026, 10, 31)
 
 
 def read_table(filename: str, required: list[str], *, prefix: str = S3_PREFIX) -> pd.DataFrame:
@@ -195,14 +192,16 @@ def validate_tariff_day(day: date, schedule: pd.DataFrame) -> None:
 
 def apply_tariff_scenario(
 	monthly: pd.DataFrame, summary: pd.DataFrame, plan: pd.DataFrame,
-	start: date = STUDY_START, end: date = STUDY_END,
+	start: date | None = None, end: date | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-	"""Restrict to the study window and replace market-only costs with market + 6.2TD tolls and charges.
+	"""Use all published tariff days, optionally filtered, with market + 6.2TD costs.
 
 	Market-only costs are kept as coste_mercado_* so the UI can show the breakdown.
 	"""
 	summary = summary[
-		summary["fecha_local"].map(lambda value: start <= value <= end)
+		summary["fecha_local"].map(
+			lambda value: (start is None or start <= value) and (end is None or value <= end)
+		)
 		& summary["coste_regulado_baseline_total_eur"].notna()
 	].copy()
 	plan = plan[plan["fecha_local"].isin(set(summary["fecha_local"]))].copy()
