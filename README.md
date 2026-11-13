@@ -116,8 +116,11 @@ bono social, IVA e IEE estan fuera.
 
 En las tres vistas de resultados, seleccionar **Desaladora · Som Energia
 (simulado)** para consultar costes y ahorro de la carga flexible reoptimizada
-con PH. La programacion diaria muestra de un vistazo las horas elegidas y la
-energia a mover: en este caso, 4 horas de 7 MWh y 1 hora de 2 MWh.
+con PH. La programacion diaria muestra una tabla HTML con las 23/24/25 horas,
+el precio Som completo y las horas programadas en verde: en este caso,
+4 horas de 7 MWh y 1 hora de 2 MWh. Al pulsar una fila se resalta y se
+actualizan debajo la formula numerica y el desglose de precio de esa hora.
+Las horas repetidas se identifican por UTC y su zona local, sin confundirlas.
 Los costes S0/S1 y ahorro se resumen en una tarjeta del dia, solo para la carga
 flexible; no se muestran costes de la planta completa. El desglose de energia
 queda plegado como detalle opcional. El CSV tiene siete columnas con hora,

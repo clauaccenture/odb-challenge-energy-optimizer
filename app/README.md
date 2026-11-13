@@ -116,8 +116,9 @@ No se descargan fuentes de REData, no se recalcula la optimización y no se escr
    Esos datos siguen conservados y verificados internamente, no se eliminan de S3.
 
 En modo Som, las tres primeras pantallas usan los costes de **energía flexible**
-publicados, antes de impuestos. La programación diaria destaca únicamente las
-horas elegidas y la energía a mover a cada una, ordenadas cronológicamente:
+publicados, antes de impuestos. La programación diaria presenta una tabla HTML
+con todas las horas del día (23/24/25), el precio indexado completo y los
+consumos y costes flexibles S0/S1. Las horas elegidas se destacan en verde:
 en este caso, **4 horas de 7 MWh y 1 hora de 2 MWh = 30 MWh**. El reparto mostrado
 siempre procede del plan Gold: no se fuerza ese patrón ni se recalcula el plan
 en Streamlit. Las horas repetidas de otoño conservan su zona y desfase UTC.
@@ -127,10 +128,16 @@ coste S1 (después), ahorro y porcentaje sobre S0. Solo se valora la carga
 flexible, no el consumo completo de la planta ni su potencia contratada.
 El porcentaje no se calcula si el coste S0 no es positivo.
 
+Al pulsar una fila (o activar su hora con el teclado), un borde identifica la
+hora consultada. Debajo aparecen la fórmula Som, la sustitución numérica y el
+desglose del precio publicado para esa hora, sin reoptimizar ni alterar los
+totales diarios. Las horas repetidas se seleccionan por su instante UTC; al
+cambiar de día se consulta inicialmente su primera hora.
+
 Debajo queda **Ver desglose de energía flexible**, con los componentes de coste
-S0/S1 y su contribución al ahorro. La temperatura también está plegada y no se
-consulta hasta abrir su sección. La leyenda y explicación contractual se
-reservan para la cuarta pantalla.
+S0/S1 del día y su contribución al ahorro. La temperatura también está plegada
+y no se consulta hasta abrir su sección. La leyenda contractual completa y
+las fuentes siguen en la cuarta pantalla.
 
 El CSV descargado tiene solo siete columnas: **Hora local**, **Precio EUR/MWh**
 (indexado completo), **Carga S0 MWh**, **Carga S1 MWh**, **Coste S0 EUR**,

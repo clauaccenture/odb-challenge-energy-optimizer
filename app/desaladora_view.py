@@ -6,6 +6,7 @@ import yaml
 
 from desaladora_data import COMPONENTS
 from formatting import format_eur, format_number, format_pct
+from som_hour_table import render_hour_table
 
 SOM_SCOPE = (
     "Simulación desaladora · referencia Som Energia 6.2TD, no contrato ni factura real. "
@@ -14,8 +15,9 @@ SOM_SCOPE = (
     "Antes de IVA e IEE; sin término de potencia, excesos, reactiva ni otros conceptos de factura."
 )
 COMPONENT_LABELS = [
-    "Mercado REData", "Pc", "Sc", "Desvíos", "GdO", "Operadores",
-    "Pérdidas", "FE", "F", "Ajuste factor 1,015", "Peajes", "Cargos",
+    "Mercado REData", "Pagos por capacidad", "Sobrecostes de gestión de la red",
+    "Desvíos", "Garantías de origen", "Operadores REE y OMIE", "Pérdidas de energía (coste)",
+    "Fondo de eficiencia energética", "Margen de la cooperativa", "Ajuste factor 1,015", "Peajes", "Cargos",
 ]
 
 
@@ -129,28 +131,13 @@ def formula_legend(cfg: dict, year: int) -> pd.DataFrame:
 
 
 def render_indexed_schedule(schedule: pd.DataFrame) -> None:
-    display = schedule.copy()
-    display["Intervalo local"] = display["datetime_local"].map(
-        lambda value: f"{value:%H:%M %Z %z} – {value + pd.Timedelta(hours=1):%H:%M %Z %z}"
-    )
-    selected = display[display["consumo_optimizado_mwh"] > 0]
-    energy = selected["consumo_optimizado_mwh"].sum()
-    hours, results = st.columns([1.4, 1])
-    with hours:
-        st.subheader(f"Mueve los {energy:g} MWh a estas {len(selected)} horas")
-        allocation = selected["consumo_optimizado_mwh"].value_counts().sort_index(ascending=False)
-        distribution = " + ".join(f"{count} h × {amount:g} MWh" for amount, count in allocation.items())
-        st.markdown(f"**{distribution.replace('.', ',')} = {energy:g} MWh**")
-        st.dataframe(
-            selected[["Intervalo local", "consumo_optimizado_mwh"]].rename(columns={
-                "Intervalo local": "Hora elegida", "consumo_optimizado_mwh": "Energía a mover (MWh)",
-            }), hide_index=True, column_config={
-                "Energía a mover (MWh)": st.column_config.ProgressColumn(
-                    min_value=0, max_value=float(selected["consumo_optimizado_mwh"].max()), format="%g MWh",
-                ),
-            }, alt="Horas elegidas y energía flexible que mover a cada una",
-        )
-        st.caption("En las demás horas, la carga flexible S1 es cero.")
+    energy = schedule["consumo_optimizado_mwh"].sum()
+    hours, results = st.columns([1.35, .65])
+    with hours, st.container(border=True):
+        st.subheader("Programación horaria")
+        st.caption(f"{len(schedule)} horas · precio indexado Som · carga flexible S0/S1")
+        selected_hour = render_hour_table(schedule)
+        st.caption("Verde: horas programadas. Borde: hora consultada. Pulsa una fila para ver su precio y fórmula.")
     baseline = float(schedule["coste_energia_flexible_baseline_eur"].sum())
     optimized = float(schedule["coste_energia_flexible_optimizado_eur"].sum())
     saving = baseline - optimized
@@ -176,6 +163,7 @@ def render_indexed_schedule(schedule: pd.DataFrame) -> None:
         "Descargar plan del día", exported.to_csv(index=False).encode("utf-8"),
         file_name=f"desaladora_plan_{schedule['fecha_local'].iloc[0]}.csv", mime="text/csv",
     )
+    render_hour_formula(selected_hour)
     with st.expander("Ver desglose de energía flexible", key="som_price_details", on_change="rerun") as details:
         if details.open:
             breakdown = pd.DataFrame({
@@ -188,3 +176,39 @@ def render_indexed_schedule(schedule: pd.DataFrame) -> None:
                 breakdown, hide_index=True, key="som_cost_details",
                 alt="Desglose del coste con peajes y cargos contados una sola vez",
             )
+
+
+def render_hour_formula(hour: pd.Series) -> None:
+    start = hour["datetime_local"]
+    st.subheader(f"Precio Som de la hora seleccionada · {start:%H:%M %Z %z}")
+    st.latex(r"PH = 1{,}015\,[(PHM + Pc + Sc + Dsv + GdO + POsOm)(1 + Perd) + FE + F] + PTD + CA")
+
+    def number(value: float) -> str:
+        return f"{value:.4f}".replace(".", "{,}")
+
+    acquisition = " + ".join(
+        rf"\left({number(hour[column])}\right)" if hour[column] < 0 else number(hour[column])
+        for column in ["precio_eur_mwh", "pc_eur_mwh", "sc_eur_mwh", "dsv_eur_mwh", "gdo_eur_mwh", "posom_eur_mwh"]
+    )
+    st.latex(
+        r"\begin{aligned} PH &= "
+        + number(hour["factor_formula"]) + r"\,\Big[(" + acquisition
+        + r")\\ &\quad \times (1 + " + number(hour["perdidas_fraccion"])
+        + r") + " + number(hour["fe_eur_mwh"]) + " + " + number(hour["f_eur_mwh"])
+        + r"\Big] + " + number(hour["peaje_energia_eur_mwh"]) + " + " + number(hour["cargo_energia_eur_mwh"])
+        + r"\\ &= \boxed{" + number(hour["precio_indexado_eur_mwh"]) + r"\ \text{EUR/MWh}}\end{aligned}"
+    )
+    st.caption(
+        "Valores utilizados en el cálculo de esa hora, redondeados para mostrarlos. "
+        "PHM: media horaria REData. PTD/CA: regulados. GdO: histórico publicado, criterio fiscal supuesto. "
+        "Pc, Sc, Dsv, POsOm, FE, F y Perd: supuestos. 1,015: factor público Som. Antes de impuestos."
+    )
+    breakdown = pd.DataFrame({
+        "Símbolo": ["PHM", "Pc", "Sc", "Dsv", "GdO", "POsOm", "Perd", "FE", "F", "1,015", "PTD", "CA"],
+        "Componente": COMPONENT_LABELS,
+        "EUR/MWh": [hour[column] for column in COMPONENTS],
+    })
+    st.table(
+        breakdown.style.format({"EUR/MWh": lambda value: format_number(value, 4)}),
+        hide_index=True, alt="Desglose del precio indexado de la hora seleccionada",
+    )

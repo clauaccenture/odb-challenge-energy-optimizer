@@ -3,6 +3,7 @@ from hashlib import sha256
 from io import BytesIO
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import runpy
 import sys
 import unittest
@@ -18,6 +19,7 @@ sys.path.insert(0, str(APP_DIR))
 
 import data_loader
 import desaladora_data
+import som_hour_table
 
 
 class DesaladoraDashboardTests(unittest.TestCase):
@@ -151,20 +153,16 @@ class DesaladoraDashboardTests(unittest.TestCase):
                 self.assertNotIn("nan €", markup)
                 app.radio(key="view").set_value("Programación diaria").run()
                 self.assertEqual(list(app.exception), [])
-                chosen = app.dataframe[0].value
-                self.assertEqual(len(chosen), 5)
-                self.assertEqual(chosen["Energía a mover (MWh)"].sort_values().tolist(), [2, 7, 7, 7, 7])
-                self.assertEqual(list(chosen.columns), ["Hora elegida", "Energía a mover (MWh)"])
-                self.assertEqual(len(app.dataframe), 1)
+                self.assertEqual(len(app.table[0].value), len(desaladora_data.COMPONENTS))
+                self.assertEqual(len(app.dataframe), 0)
                 temperature_loader.assert_not_called()
                 app.session_state["som_price_details"] = True
                 app.run()
-                self.assertEqual(len(app.dataframe), 2)
+                self.assertEqual(len(app.dataframe), 1)
                 app.selectbox(key="schedule_month").set_value(pd.Timestamp("2026-12-01").date()).run()
                 self.assertTrue(app.button(key="schedule_day_2026-12-25").disabled)
                 app.button(key="schedule_day_2026-12-24").click().run()
-                self.assertEqual(app.dataframe[0].value["Energía a mover (MWh)"].sum(), 30)
-                costs = app.dataframe[1].value
+                costs = app.dataframe[0].value
                 self.assertAlmostEqual(costs["Ahorro EUR"].sum(), float(app.metric[-1].value.replace(" €", "").replace(".", "").replace(",", ".")), places=2)
                 app.session_state["som_temperature_details"] = True
                 app.run()
@@ -241,8 +239,66 @@ class DesaladoraDashboardTests(unittest.TestCase):
                     percentage = (exported["Ahorro EUR"].sum() / exported["Coste S0 EUR"].sum()) * 100
                     formatted_percentage = f"{percentage:.1f}".replace(".", ",") + " %"
                     self.assertTrue(any(formatted_percentage + " sobre el coste S0." == item.value for item in app.caption))
-                    self.assertAlmostEqual(app.dataframe[0].value["Energía a mover (MWh)"].sum(), 30)
+                    self.assertAlmostEqual(app.table[0].value["EUR/MWh"].sum(), daily_source["precio_indexado_eur_mwh"].iloc[0])
                     self.assertFalse(any("planta" in metric.label.lower() for metric in app.metric))
+
+    def test_html_table_preserves_23_24_25_intervals_and_marks_only_programmed_hours(self):
+        cfg, _ = self.gold["cargar_config"](APP_DIR.parent / "config" / "config_desaladora.yaml")
+        for day, expected_hours in (("2026-03-29", 23), ("2026-12-24", 24), ("2026-10-25", 25)):
+            with self.subTest(day=day):
+                start = pd.Timestamp(day, tz="Europe/Madrid")
+                end = pd.Timestamp(start.date() + pd.Timedelta(days=1), tz="Europe/Madrid")
+                times = pd.date_range(start, end, freq="h", inclusive="left")
+                silver = pd.DataFrame({"datetime_utc": times.tz_convert("UTC"), "precio_eur_mwh": range(expected_hours)})
+                plan, _, _ = self.gold["build_desaladora"](silver, cfg)
+                first_utc = plan["datetime_utc"].iloc[0].isoformat()
+                with patch.object(som_hour_table, "_TABLE", return_value=SimpleNamespace(selected_hour=first_utc)) as table:
+                    selected = som_hour_table.render_hour_table(plan)
+                rows = table.call_args.kwargs["data"]["rows"]
+                self.assertEqual(len(rows), expected_hours)
+                self.assertEqual(len({row["utc"] for row in rows}), expected_hours)
+                self.assertEqual([row["picked"] for row in rows], (plan["consumo_optimizado_mwh"] > 0).tolist())
+                self.assertEqual(sum(row["picked"] for row in rows), 5)
+                self.assertEqual([row["cells"][2] for row in rows], [
+                    f"{value:,.4f}".replace(",", "_").replace(".", ",").replace("_", ".")
+                    for value in plan["precio_indexado_eur_mwh"]
+                ])
+                self.assertEqual(selected["datetime_utc"].isoformat(), first_utc)
+                if expected_hours == 25:
+                    repeated = [row for row in rows if row["cells"][0].startswith("02:00")]
+                    self.assertEqual(len(repeated), 2)
+                    self.assertNotEqual(repeated[0]["cells"][0], repeated[1]["cells"][0])
+
+    def test_selected_hour_drives_formula_and_breakdown_without_changing_day_totals(self):
+        _, _, _, plan = self.load()
+        day = pd.Timestamp("2026-10-25").date()
+        schedule = plan[plan["fecha_local"] == day]
+        app = self.app(view="Programación diaria")
+        daily_metrics = [metric.value for metric in app.metric]
+        # Both autumn 02:00 intervals must be independently selectable.
+        targets = schedule[schedule["datetime_local"].dt.hour == 2]
+        targets = pd.concat([targets, schedule[schedule["datetime_local"].dt.hour == 10]])
+        for _, row in targets.iterrows():
+            with self.subTest(hour=row["datetime_utc"]):
+                app.session_state[f"som_hour_table_{day}"] = {"selected_hour": row["datetime_utc"].isoformat()}
+                app.run()
+                self.assertEqual(list(app.exception), [])
+                self.assertIn(
+                    f"Precio Som de la hora seleccionada · {row['datetime_local']:%H:%M %Z %z}",
+                    [heading.value for heading in app.subheader],
+                )
+                breakdown = app.table[0].value
+                self.assertAlmostEqual(breakdown["EUR/MWh"].sum(), row["precio_indexado_eur_mwh"])
+                self.assertEqual(breakdown["EUR/MWh"].tolist(), [row[column] for column in desaladora_data.COMPONENTS])
+                self.assertIn(
+                    r"\boxed{" + f"{row['precio_indexado_eur_mwh']:.4f}".replace(".", "{,}"),
+                    app.latex[1].value,
+                )
+                self.assertEqual([metric.value for metric in app.metric], daily_metrics)
+        app.session_state["selected_date"] = pd.Timestamp("2026-12-24").date()
+        app.run()
+        self.assertEqual(list(app.exception), [])
+        self.assertIn("Precio Som de la hora seleccionada · 00:00 CET +0100", [heading.value for heading in app.subheader])
 
     def test_can_switch_between_original_and_indexed_results(self):
         plan_key = self.metadata["outputs_s3"]["programacion_horaria.parquet"]
