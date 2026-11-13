@@ -155,3 +155,4 @@ def test_terminos_estimados_con_rango_coherente():
         assert lo <= t["value"] <= hi, f"{nombre}: value fuera de rango"
         for esc, v in t.get("escenarios", {}).items():
             assert lo <= v <= hi, f"{nombre}: escenario {esc} fuera de rango"
+        
