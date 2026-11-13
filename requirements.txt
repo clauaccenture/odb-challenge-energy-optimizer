@@ -8,3 +8,5 @@ pulp
 matplotlib
 plotly
 streamlit
+pyyaml
+tzdata
