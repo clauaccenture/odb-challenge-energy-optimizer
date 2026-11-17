@@ -29,6 +29,10 @@ El objetivo no es reducir el consumo, sino mejorar la decisión de **cuándo con
 |---|---|---|---|---|
 | REData · Red Eléctrica | Hora, precio del mercado diario | API REST JSON sin token (`https://apidatos.ree.es/es/datos/mercados/precios-mercados-tiempo-real`) | 15/10/2026 | Red Eléctrica de España (REData) |
 | AEMET OpenData | Fecha, provincia, temperatura máxima, mínima y media, hora temperatura máxima y mínima | API REST con clave gratuita (`https://opendata.aemet.es`) | 18/10/2026 | Agencia Estatal de Meteorología (AEMET) |
+| CNMC | Índice MIBGAS y producto diario D+1 | API CKAN `datastore_search` (`https://catalogodatos.cnmc.es/api/3/action/datastore_search`) | Ventana histórica disponible hasta 31/05/2026 para D+1 | Comisión Nacional de los Mercados y la Competencia (CNMC) |
+| MIBGAS | Producto diario D+1 para PVB, área ES | CSV anual oficial (`https://www.mibgas.es/es/file-access/`) | 2024, 2025 y 2026 | MIBGAS |
+
+La documentación detallada de estas fuentes está en [`docs/fuentes/cnmc.md`](docs/fuentes/cnmc.md) y [`docs/fuentes/mibgas.md`](docs/fuentes/mibgas.md). CNMC se utiliza como contraste, pero no cubre el final de la ventana del modelo; MIBGAS es la fuente principal para completar la serie D+1 hasta el 30/09/2026.
 
 ## 4. Calidad de datos
 
@@ -367,33 +371,27 @@ Para ejecutar el proyecto con **otro periodo**, basta con cambiar las fechas `--
 
 ### 8.7. Flujo de datos y configuración del modelo
 
-La configuración común de la ventana está en `config/modelo.yml`. Los parámetros específicos de ESIOS y CNMC/MIBGAS están separados en `config/esios.yml` y `config/cnmc.yml`. El flujo CNMC/MIBGAS parte de los recursos públicos de CNMC, conserva la respuesta original en `data/raw/cnmc/` y genera los datos procesados y el informe de calidad en `data/processed/cnmc/`.
+La configuración común de la ventana está en `config/modelo.yml`. Los parámetros específicos de ESIOS, CNMC y MIBGAS están separados en `config/esios.yml`, `config/cnmc.yml` y `config/mibgas.yml`. Los loaders viven en `src/config/`; los módulos de ingesta y calidad específicos están en `src/ingesta/` y `src/calidad/`.
+
+CNMC conserva la respuesta original en `data/raw/cnmc/` y genera sus datos procesados en `data/processed/cnmc/`. Su producto D+1 deja de tener cobertura después del 31/05/2026, por lo que se utiliza como contraste histórico. MIBGAS conserva los CSV anuales en `data/raw/mibgas/` y genera `data/processed/mibgas/mibgas_d1.json`, con cobertura validada del 01/10/2024 al 30/09/2026.
 
 Los notebooks se ejecutan desde la raiz del proyecto con el entorno virtual activado, abriendo y ejecutando sus celdas en orden:
 
 - `notebooks/01_ingesta_cnmc.ipynb`: descarga el indice MIBGAS y el producto diario D+1.
 - `notebooks/02_calidad_cnmc.ipynb`: filtra la ventana, normaliza precios, deduplica y calcula el informe de calidad.
+- `notebooks/01_ingesta_mibgas.ipynb`: descarga los CSV anuales oficiales de MIBGAS.
+- `notebooks/02_calidad_mibgas.ipynb`: filtra D+1 por fecha de entrega, normaliza precios, deduplica y calcula el informe de calidad.
 
-La ingesta real requiere conectividad con CNMC. Los tests no llaman a la API y usan respuestas simuladas.
+La ingesta real requiere conectividad con CNMC y MIBGAS. Los tests no llaman a las fuentes externas y utilizan respuestas o ficheros simulados.
 
 ### 8.8. Ejecutar las pruebas
 
 Desde la raíz del repositorio y con el entorno virtual activado, en Windows PowerShell:
 
-```powershell
-python -m unittest discover -s notebooks\tests -p "test_*esios.py" -v
-```
-
-Este comando ejecuta las pruebas de ingesta y calidad ESIOS. Para ejecutar todas las pruebas de notebooks:
+Para ejecutar todas las pruebas de notebooks:
 
 ```powershell
 python -m unittest discover -s notebooks\tests -p "test_*.py" -v
-```
-
-Para ejecutar solo las pruebas CNMC/MIBGAS:
-
-```powershell
-python -m unittest discover -s notebooks\tests -p "test_*cnmc.py" -v
 ```
 
 En Linux o macOS, usa `/` en lugar de `\` en las rutas. Las pruebas de ingesta escriben en directorios temporales y los eliminan automáticamente al terminar; no modifican `data/raw` ni descargan datos reales.
