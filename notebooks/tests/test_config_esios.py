@@ -5,7 +5,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from src.esios_config import load_esios_config
+from src.config.esios import load_esios_config
 
 
 class ModelConfigTests(unittest.TestCase):

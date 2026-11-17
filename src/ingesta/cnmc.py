@@ -5,13 +5,12 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import requests
 
+from src.ingesta.base import RequestGet, Sleep, request_json, save_json
 
-RequestGet = Callable[..., requests.Response]
-Sleep = Callable[[float], None]
 
 
 @dataclass(frozen=True)
@@ -43,21 +42,15 @@ def get_json(
     request_get: RequestGet = requests.get,
     sleep: Sleep = time.sleep,
 ) -> dict[str, Any]:
-    for attempt in range(retries):
-        try:
-            response = request_get(url, params=params, timeout=timeout)
-            if response.status_code == 429 or response.status_code >= 500:
-                response.raise_for_status()
-            response.raise_for_status()
-            payload = response.json()
-            if not isinstance(payload, dict):
-                raise ValueError("CNMC devolvio una respuesta JSON que no es un objeto.")
-            return payload
-        except requests.RequestException as exc:
-            if attempt == retries - 1:
-                raise RuntimeError(f"Fallo la peticion a CNMC: {url}") from exc
-            sleep(2 ** attempt)
-    raise RuntimeError(f"Fallo la peticion a CNMC: {url}")
+    return request_json(
+        url,
+        params=params,
+        retries=retries,
+        timeout=timeout,
+        source="CNMC",
+        request_get=request_get,
+        sleep=sleep,
+    )
 
 
 def fetch_resource(
@@ -101,9 +94,7 @@ def fetch_resource(
 
 
 def save_raw(payload: dict[str, Any], path: Path) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return path
+    return save_json(payload, path)
 
 
 def ingest_resource(

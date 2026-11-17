@@ -7,6 +7,8 @@ from typing import Any
 
 import pandas as pd
 
+from src.calidad.base import deduplicate_records as deduplicate_common
+from src.calidad.base import to_number
 from src.ingesta.cnmc import CnmcResourceConfig
 
 
@@ -38,18 +40,7 @@ def classify_raw_file(path: Path) -> dict[str, Any]:
 
 
 def _to_number(value: Any) -> float | None:
-    if value is None or value == "":
-        return None
-    if isinstance(value, str):
-        value = value.strip().replace(" ", "")
-        if "," in value and "." in value:
-            value = value.replace(".", "").replace(",", ".")
-        else:
-            value = value.replace(",", ".")
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
+    return to_number(value)
 
 
 def normalize_records(
@@ -108,12 +99,10 @@ def normalize_records(
 
 
 def deduplicate_records(values: pd.DataFrame) -> tuple[pd.DataFrame, int]:
-    if values.empty:
-        return values.copy(), 0
-    key_columns = ["fecha_negociacion", "producto", "source_resource"]
-    duplicate_mask = values.duplicated(subset=key_columns, keep="last")
-    deduplicated = values.loc[~duplicate_mask].reset_index(drop=True)
-    return deduplicated, int(duplicate_mask.sum())
+    return deduplicate_common(
+        values,
+        ["fecha_negociacion", "producto", "source_resource"],
+    )
 
 
 def add_age_days(values: pd.DataFrame, as_of: pd.Timestamp) -> pd.DataFrame:

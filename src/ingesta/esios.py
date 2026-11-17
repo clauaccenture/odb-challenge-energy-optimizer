@@ -1,17 +1,15 @@
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import requests
 
+from src.ingesta.base import RequestGet, Sleep, request_json, save_json
 
-RequestGet = Callable[..., requests.Response]
-Sleep = Callable[[float], None]
 
 
 @dataclass(frozen=True)
@@ -37,26 +35,17 @@ def get_json(
     request_get: RequestGet = requests.get,
     sleep: Sleep = time.sleep,
 ) -> dict[str, Any]:
-    for attempt in range(retries):
-        try:
-            response = request_get(url, headers=headers, params=params, timeout=timeout)
-            if response.status_code in (401, 403):
-                raise PermissionError(
-                    f"ESIOS rechazo la credencial o el acceso (HTTP {response.status_code})."
-                )
-            if response.status_code == 429 or response.status_code >= 500:
-                response.raise_for_status()
-            response.raise_for_status()
-            payload = response.json()
-            if not isinstance(payload, dict):
-                raise ValueError("ESIOS devolvio una respuesta JSON que no es un objeto.")
-            return payload
-        except requests.RequestException as exc:
-            if attempt == retries - 1:
-                raise RuntimeError(f"Fallo la peticion a ESIOS: {url}") from exc
-            wait = 2 ** attempt
-            sleep(wait)
-    raise RuntimeError(f"Fallo la peticion a ESIOS: {url}")
+    return request_json(
+        url,
+        headers=headers,
+        params=params,
+        retries=retries,
+        timeout=timeout,
+        source="ESIOS",
+        forbidden_statuses={401, 403},
+        request_get=request_get,
+        sleep=sleep,
+    )
 
 
 def save_raw(
@@ -67,11 +56,7 @@ def save_raw(
     bucket: str | None = None,
     s3_client: Any = None,
 ) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    save_json(payload, path)
     if upload_to_s3 and s3_key:
         if not bucket:
             raise ValueError("Falta el bucket S3 para subir el archivo raw.")

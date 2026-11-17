@@ -4,7 +4,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from src.cnmc_config import load_cnmc_config
+from src.config.cnmc import load_cnmc_config
 
 
 class CnmcConfigTests(unittest.TestCase):
