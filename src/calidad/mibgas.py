@@ -79,4 +79,8 @@ def normalize_records(
 
 
 def deduplicate_records(values: pd.DataFrame) -> tuple[pd.DataFrame, int]:
-    return deduplicate_common(values, ["fecha_entrega", "producto"])
+    return deduplicate_common(
+        values,
+        ["fecha_entrega", "producto"],
+        order_columns=["fecha_negociacion"],
+    )

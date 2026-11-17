@@ -8,7 +8,14 @@ from typing import Any
 
 import requests
 
-from src.ingesta.base import RequestGet, Sleep, request_json, save_json
+from src.ingesta.base import (
+    RequestGet,
+    Sleep,
+    load_valid_json,
+    request_json,
+    save_json,
+    validate_http_settings,
+)
 
 
 
@@ -24,6 +31,15 @@ class EsiosIngestionConfig:
     upload_to_s3: bool = False
     bucket: str | None = None
     force: bool = False
+
+    def __post_init__(self) -> None:
+        validate_http_settings(
+            self.base_url, self.retries, self.timeout, self.pause_seconds
+        )
+        if not isinstance(self.headers, dict):
+            raise TypeError("headers debe ser un diccionario")
+        if not isinstance(self.locale, str) or not self.locale.strip():
+            raise ValueError("locale debe ser un texto no vacio")
 
 
 def get_json(
@@ -69,6 +85,14 @@ def save_raw(
 
 
 def date_chunks(start: date, end: date, size: int = 30):
+    if not isinstance(start, date) or not isinstance(end, date):
+        raise TypeError("start y end deben ser fechas")
+    if start > end:
+        raise ValueError("start no puede ser posterior a end")
+    if isinstance(size, bool) or not isinstance(size, int):
+        raise TypeError("size debe ser un entero")
+    if size < 1 or size > 365:
+        raise ValueError("size debe estar entre 1 y 365 dias")
     current = start
     while current <= end:
         chunk_end = min(current + timedelta(days=size - 1), end)
@@ -98,7 +122,14 @@ def download_one(
     s3_key = f"raw/esios/indicadores/{indicator_id}/{filename}"
 
     if local_path.exists() and not config.force:
-        return "skipped", indicator_id, chunk_start, chunk_end, 0, None
+        payload = load_valid_json(local_path)
+        if payload is not None:
+            try:
+                n_values = values_count(payload)
+            except ValueError:
+                n_values = 0
+            if n_values > 0:
+                return "skipped", indicator_id, chunk_start, chunk_end, n_values, None
 
     url = f"{config.base_url}/indicators/{indicator_id}"
     params = {

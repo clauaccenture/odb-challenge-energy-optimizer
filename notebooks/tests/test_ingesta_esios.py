@@ -24,6 +24,12 @@ class EsiosIngestionTests(unittest.TestCase):
             (date(2026, 1, 31), date(2026, 2, 5)),
         ])
 
+    def test_date_chunks_rejects_invalid_window_and_size(self):
+        with self.assertRaises(ValueError):
+            list(ingestion.date_chunks(date(2026, 2, 1), date(2026, 1, 1)))
+        with self.assertRaises(ValueError):
+            list(ingestion.date_chunks(date(2026, 1, 1), date(2026, 1, 2), size=0))
+
     def test_values_count_requires_indicator_values_list(self):
         """Valida la estructura mínima esperada en una respuesta de indicador."""
         self.assertEqual(ingestion.values_count({"indicator": {"values": [1, 2]}}), 2)
@@ -138,6 +144,34 @@ class EsiosIngestionTests(unittest.TestCase):
         self.assertEqual(result[4], 1)
         self.assertEqual(skipped[0], "skipped")
         self.assertEqual(request_get.call_count, 1)
+
+    def test_download_one_redownloads_empty_existing_file(self):
+        response = Mock(status_code=200)
+        response.json.return_value = {"indicator": {"values": [{"value": 10}]}}
+        request_get = Mock(return_value=response)
+        task = (28, date(2026, 1, 1), date(2026, 1, 30))
+
+        with TemporaryDirectory() as directory:
+            raw_dir = Path(directory)
+            existing = raw_dir / "indicadores" / "28" / (
+                "indicador_28_2026-01-01_2026-01-30.json"
+            )
+            existing.parent.mkdir(parents=True)
+            existing.write_text("{}", encoding="utf-8")
+            config = ingestion.EsiosIngestionConfig(
+                raw_dir=raw_dir,
+                base_url="https://example.invalid",
+                headers={"x-api-key": "test"},
+                retries=1,
+                pause_seconds=0,
+            )
+
+            result = ingestion.download_one(
+                task, config, request_get=request_get, sleep=lambda _: None
+            )
+
+        self.assertEqual(result[0], "downloaded")
+        request_get.assert_called_once()
 
     def test_download_one_force_overwrites_existing_file(self):
         """Comprueba que force permite reemplazar un fichero raw existente."""

@@ -36,6 +36,37 @@ class MibgasIngestionTests(unittest.TestCase):
             self.assertTrue(path.is_file())
             self.assertIn("MIBGAS_Data_2025.csv", requests[0][0])
 
+    def test_config_rejects_invalid_timeout(self):
+        with self.assertRaises(ValueError):
+            MibgasIngestionConfig(
+                raw_dir=Path("."),
+                base_url="https://example.test",
+                timeout=0,
+            )
+
+    def test_ingest_year_redownloads_invalid_existing_file(self):
+        requests = []
+
+        def fake_get(url, **kwargs):
+            requests.append((url, kwargs))
+            return FakeResponse()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            raw_dir = Path(temporary)
+            path = raw_dir / "MIBGAS_Data_2025.csv"
+            path.write_bytes(b"truncated")
+            config = MibgasIngestionConfig(
+                raw_dir=raw_dir,
+                base_url="https://example.test",
+            )
+
+            status, _, _ = ingest_year(
+                2025, config, request_get=fake_get, sleep=lambda _: None
+            )
+
+        self.assertEqual(status, "downloaded")
+        self.assertEqual(len(requests), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

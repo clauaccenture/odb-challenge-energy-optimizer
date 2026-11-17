@@ -102,6 +102,7 @@ def deduplicate_records(values: pd.DataFrame) -> tuple[pd.DataFrame, int]:
     return deduplicate_common(
         values,
         ["fecha_negociacion", "producto", "source_resource"],
+        order_columns=["captured_at_utc"],
     )
 
 

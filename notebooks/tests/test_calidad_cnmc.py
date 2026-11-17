@@ -98,6 +98,29 @@ class CnmcQualityTests(unittest.TestCase):
         self.assertEqual(aged.iloc[0]["precio_eur_mwh"], 42.0)
         self.assertEqual(aged.iloc[0]["edad_precio_gas_dias"], 7)
 
+    def test_deduplicate_keeps_latest_capture_not_input_order(self):
+        values = pd.DataFrame([
+            {
+                "fecha_negociacion": date(2025, 10, 1),
+                "producto": "Producto diario D+1",
+                "source_resource": "producto_diario_d1",
+                "precio_eur_mwh": 42.0,
+                "captured_at_utc": "2026-11-16T12:00:00+00:00",
+            },
+            {
+                "fecha_negociacion": date(2025, 10, 1),
+                "producto": "Producto diario D+1",
+                "source_resource": "producto_diario_d1",
+                "precio_eur_mwh": 40.0,
+                "captured_at_utc": "2026-11-16T00:00:00+00:00",
+            },
+        ])
+
+        deduplicated, count = quality.deduplicate_records(values)
+
+        self.assertEqual(count, 1)
+        self.assertEqual(deduplicated.iloc[0]["precio_eur_mwh"], 42.0)
+
 
 if __name__ == "__main__":
     unittest.main()

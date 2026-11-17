@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -9,7 +8,15 @@ from typing import Any
 
 import requests
 
-from src.ingesta.base import RequestGet, Sleep, request_json, save_json
+from src.ingesta.base import (
+    RequestGet,
+    Sleep,
+    load_valid_json,
+    request_json,
+    save_json,
+    validate_http_settings,
+    validate_positive_int,
+)
 
 
 
@@ -32,6 +39,14 @@ class CnmcIngestionConfig:
     timeout: int = 90
     pause_seconds: float = 1
     force: bool = False
+
+    def __post_init__(self) -> None:
+        validate_http_settings(
+            self.base_url, self.retries, self.timeout, self.pause_seconds
+        )
+        validate_positive_int("page_size", self.page_size)
+        if self.page_size > 10_000:
+            raise ValueError("page_size no puede superar 10.000")
 
 
 def get_json(
@@ -77,11 +92,12 @@ def fetch_resource(
         result = payload.get("result")
         if not isinstance(result, dict) or not isinstance(result.get("records"), list):
             raise ValueError("La respuesta CNMC no contiene result.records como lista.")
-        page = [record for record in result["records"] if isinstance(record, dict)]
+        raw_page = result["records"]
+        page = [record for record in raw_page if isinstance(record, dict)]
         records.extend(page)
         total = result.get("total")
-        offset += len(page)
-        if not page or (isinstance(total, int) and offset >= total) or len(page) < config.page_size:
+        offset += len(raw_page)
+        if not raw_page or (isinstance(total, int) and offset >= total) or len(raw_page) < config.page_size:
             break
         sleep(config.pause_seconds)
     return {
@@ -105,8 +121,9 @@ def ingest_resource(
 ) -> tuple[str, Path, int]:
     path = config.raw_dir / f"{resource.name}.json"
     if path.exists() and not config.force:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        return "skipped", path, len(payload.get("records", []))
+        payload = load_valid_json(path, required_list_key="records")
+        if payload is not None:
+            return "skipped", path, len(payload["records"])
     payload = fetch_resource(resource, config, request_get=request_get, sleep=sleep)
     save_raw(payload, path)
     return "downloaded", path, len(payload["records"])

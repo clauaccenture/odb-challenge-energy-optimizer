@@ -6,7 +6,14 @@ from pathlib import Path
 
 import requests
 
-from src.ingesta.base import RequestGet, Sleep, request_bytes, save_bytes
+from src.ingesta.base import (
+    RequestGet,
+    Sleep,
+    is_valid_bytes_file,
+    request_bytes,
+    save_bytes,
+    validate_http_settings,
+)
 
 
 @dataclass(frozen=True)
@@ -19,6 +26,13 @@ class MibgasIngestionConfig:
     timeout: int = 90
     pause_seconds: float = 1
     force: bool = False
+
+    def __post_init__(self) -> None:
+        validate_http_settings(
+            self.base_url, self.retries, self.timeout, self.pause_seconds
+        )
+        if not isinstance(self.language, str) or not self.language.strip():
+            raise ValueError("language debe ser un texto no vacio")
 
 
 def get_csv_bytes(
@@ -51,7 +65,14 @@ def ingest_year(
 ) -> tuple[str, Path, int]:
     path = config.raw_dir / f"MIBGAS_Data_{year}.csv"
     if path.exists() and not config.force:
-        return "skipped", path, path.read_bytes().count(b"\n")
+        markers = (
+            b"Trading day;Product;Place of delivery;Area;",
+            b"MIBGAS Daily Price [EUR/MWh]",
+        )
+        if is_valid_bytes_file(path, markers):
+            content = path.read_bytes()
+            if len(content.splitlines()) >= 3:
+                return "skipped", path, content.count(b"\n")
     content = get_csv_bytes(year, config, request_get=request_get, sleep=sleep)
     save_raw(content, path)
     return "downloaded", path, content.count(b"\n")

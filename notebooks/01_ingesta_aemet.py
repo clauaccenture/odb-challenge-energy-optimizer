@@ -115,7 +115,7 @@ def get_with_rate_limit(url: str, headers: dict | None = None):
         retry_after = response.headers.get("Retry-After")
         try:
             wait_seconds = max(5, int(float(retry_after))) if retry_after else 5 * (2 ** attempt)
-        except ValueError:
+        except (TypeError, ValueError):
             wait_seconds = 5 * (2 ** attempt)
         print(
             f"AEMET ha limitado la frecuencia (429); "
