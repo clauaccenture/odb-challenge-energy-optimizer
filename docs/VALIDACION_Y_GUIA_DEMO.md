@@ -35,7 +35,7 @@ Todos los componentes monetarios del YAML están expresados en **€/MWh**, no �
 
 ## 3. Qué se ha corregido y qué NO se ha corregido
 
-**Archivos del paquete:** `config_desaladora.yaml` (ruta de destino `config/config_desaladora.yaml`) y `desaladora.py` (ruta `src/desaladora.py`) proceden de la propuesta previa de la demo; `VALIDACION_Y_GUIA_DEMO.md` es nuevo y ampliado.
+**Archivos del paquete:** `config_desaladora.yaml` (ruta de destino `config/config_desaladora.yaml`) y `desaladora.py` (ruta `src/desaladora.py`) proceden de la propuesta previa de la demo.
 
 **Cambios funcionales y de configuración respecto al proyecto original del 13/11:**
 - `Pc` pasa de un escalar 0,50 a valores P1–P6; `src/desaladora.py` admite tanto escalar como diccionario por periodos.
