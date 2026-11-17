@@ -5,34 +5,42 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from src.esios_config import load_model_config
+from src.esios_config import load_esios_config
 
 
 class ModelConfigTests(unittest.TestCase):
     """Comprueba la carga y estructura mínima de la configuración versionada."""
 
-    def test_load_model_config_validates_required_sections(self):
+    def test_load_esios_config_validates_required_sections(self):
         """Rechaza configuraciones sin las secciones que consumen los notebooks."""
         invalid_configs = (
             "esios: {}\n",
             "esios:\n  ingestion: {}\n  model: {}\n",
-            "esios:\n  ingestion: {}\n  indicator_ids: [28]\n",
-            "esios:\n  model: {}\n  indicator_ids: [28]\n",
         )
 
         with TemporaryDirectory() as directory:
+            model_path = Path(directory) / "modelo.yml"
+            model_path.write_text(
+                "model:\n"
+                "  history_start: 2024-10-01\n"
+                "  history_end: 2026-09-30\n"
+                "  target_start: 2025-10-01\n"
+                "  target_end: 2026-09-30\n"
+                "  lag_days: [1, 7, 30, 365]\n",
+                encoding="utf-8",
+            )
             for content in invalid_configs:
                 with self.subTest(content=content):
-                    path = Path(directory) / "modelo.yml"
+                    path = Path(directory) / "esios.yml"
                     path.write_text(content, encoding="utf-8")
                     with self.assertRaises(ValueError):
-                        load_model_config(path)
+                        load_esios_config(path, model_path)
 
-    def test_load_model_config_esi_config(self):
+    def test_load_esios_config_reads_source_and_model(self):
         """Comprueba que la configuración ESIOS versionada se puede cargar."""
         project_root = Path(__file__).resolve().parents[2]
 
-        config = load_model_config(project_root / "config" / "modelo.yml")
+        config = load_esios_config(project_root / "config" / "esios.yml")
 
         self.assertIn("esios", config)
         self.assertEqual(config["esios"]["timezone"], "Europe/Madrid")

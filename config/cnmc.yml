@@ -1,0 +1,22 @@
+# Parametros especificos de la ingesta CNMC/MIBGAS.
+# La ventana comun se carga desde config/ventana_modelo.yml.
+cnmc:
+  timezone: Europe/Madrid
+  ingestion:
+    base_url: https://catalogodatos.cnmc.es/api/3/action/datastore_search
+    page_size: 1000
+    retries: 4
+    timeout_seconds: 90
+    pause_seconds: 1
+    force: false
+  resources:
+    indice_mibgas:
+      resource_id: aa447e3b-8669-485c-9a6e-59b368d132bf
+      date_field: fecha_de_negociacion
+      price_field: precio_indice_mibgas
+    producto_diario_d1:
+      resource_id: 3826f930-05ad-4c6b-a93e-86408387f7a1
+      date_field: fecha_de_negociacion
+      price_field: precios_de_los_productos_mibgas
+      product_field: producto_de_mibgas
+      product_value: Producto diario D+1

@@ -365,7 +365,18 @@ ls -lh data/outputs/redata/ data/outputs/aemet/
 
 Para ejecutar el proyecto con **otro periodo**, basta con cambiar las fechas `--start` y `--end` de los pasos 1 y 2. Los valores esperados anteriores corresponden al periodo del 01/10/2025 al 30/09/2026.
 
-### 8.7. Ejecutar las pruebas
+### 8.7. Flujo de datos y configuración del modelo
+
+La configuración común de la ventana está en `config/modelo.yml`. Los parámetros específicos de ESIOS y CNMC/MIBGAS están separados en `config/esios.yml` y `config/cnmc.yml`. El flujo CNMC/MIBGAS parte de los recursos públicos de CNMC, conserva la respuesta original en `data/raw/cnmc/` y genera los datos procesados y el informe de calidad en `data/processed/cnmc/`.
+
+Los notebooks se ejecutan desde la raiz del proyecto con el entorno virtual activado, abriendo y ejecutando sus celdas en orden:
+
+- `notebooks/01_ingesta_cnmc.ipynb`: descarga el indice MIBGAS y el producto diario D+1.
+- `notebooks/02_calidad_cnmc.ipynb`: filtra la ventana, normaliza precios, deduplica y calcula el informe de calidad.
+
+La ingesta real requiere conectividad con CNMC. Los tests no llaman a la API y usan respuestas simuladas.
+
+### 8.8. Ejecutar las pruebas
 
 Desde la raíz del repositorio y con el entorno virtual activado, en Windows PowerShell:
 
@@ -379,9 +390,15 @@ Este comando ejecuta las pruebas de ingesta y calidad ESIOS. Para ejecutar todas
 python -m unittest discover -s notebooks\tests -p "test_*.py" -v
 ```
 
+Para ejecutar solo las pruebas CNMC/MIBGAS:
+
+```powershell
+python -m unittest discover -s notebooks\tests -p "test_*cnmc.py" -v
+```
+
 En Linux o macOS, usa `/` en lugar de `\` en las rutas. Las pruebas de ingesta escriben en directorios temporales y los eliminan automáticamente al terminar; no modifican `data/raw` ni descargan datos reales.
 
-### 8.8. Dashboard Streamlit (opcional)
+### 8.9. Dashboard Streamlit (opcional)
 
 El proyecto incluye un dashboard desarrollado con Streamlit. Es una capa de
 visualización y no es necesaria para ejecutar el pipeline ni para obtener los
@@ -402,6 +419,6 @@ La configuración y ejecución en un entorno propio están en `app/README.md`.
 
 Mantener abiertas la consola de Streamlit y la ventana del túnel. Al terminar, cerrar el túnel con `Ctrl+C` y detener Streamlit solo si nadie más lo utiliza. No es necesario abrir puertos a Internet, instalar Python en el PC ni actualizar el código de la instancia.
 
-### 8.9. Uso de IA generativa
+### 8.10. Uso de IA generativa
 
 Se ha utilizado el asistente de IA Copilot, mediante una cuenta autorizada por la organización, como apoyo en: revisión y depuración del código de los scripts, redacción y revisión del README y de la guía de ejecución, apoyo en la demo de Streamlit. No se ha compartido información confidencial: todos los datos utilizados son abiertos. El código y los resultados generados con ayuda de la IA han sido revisados y verificados por el equipo, y cualquier miembro puede explicar cualquier parte del código y del análisis.
