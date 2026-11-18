@@ -29,10 +29,9 @@ El objetivo no es reducir el consumo, sino mejorar la decisión de **cuándo con
 |---|---|---|---|---|
 | REData · Red Eléctrica | Hora, precio del mercado diario | API REST JSON sin token (`https://apidatos.ree.es/es/datos/mercados/precios-mercados-tiempo-real`) | 15/10/2026 | Red Eléctrica de España (REData) |
 | AEMET OpenData | Fecha, provincia, temperatura máxima, mínima y media, hora temperatura máxima y mínima | API REST con clave gratuita (`https://opendata.aemet.es`) | 18/10/2026 | Agencia Estatal de Meteorología (AEMET) |
-| CNMC (histórica, retirada) | Índice MIBGAS y producto diario D+1 | API CKAN `datastore_search` (`https://catalogodatos.cnmc.es/api/3/action/datastore_search`) | Ventana histórica disponible hasta 31/05/2026 para D+1 | Comisión Nacional de los Mercados y la Competencia (CNMC) |
 | MIBGAS | Producto diario D+1 para PVB, área ES | CSV anual oficial (`https://www.mibgas.es/es/file-access/`) | 2024, 2025 y 2026 | MIBGAS |
 
-La documentación detallada de estas fuentes está en [`docs/fuentes/cnmc.md`](docs/fuentes/cnmc.md) y [`docs/fuentes/mibgas.md`](docs/fuentes/mibgas.md). La comparación de precios está en [`docs/fuentes/comparacion_cnmc_mibgas.md`](docs/fuentes/comparacion_cnmc_mibgas.md). CNMC se retiró del pipeline operativo por cobertura incompleta y por mantener una segunda serie con discrepancias de precio sin uso productivo definido; sus artefactos se conservan como histórico de auditoría. MIBGAS es la única fuente operativa para completar la serie D+1 hasta el 30/09/2026.
+La documentación detallada de MIBGAS está en [`docs/fuentes/mibgas.md`](docs/fuentes/mibgas.md). La justificación de la retirada de CNMC y la comparación realizada antes de eliminarla están en [`docs/fuentes/comparacion_cnmc_mibgas.md`](docs/fuentes/comparacion_cnmc_mibgas.md). MIBGAS es la única fuente operativa para completar la serie D+1 hasta el 30/09/2026.
 
 ## 4. Calidad de datos
 
@@ -371,30 +370,24 @@ Para ejecutar el proyecto con **otro periodo**, basta con cambiar las fechas `--
 
 ### 8.7. Flujo de datos y configuración del modelo
 
-La configuración común de la ventana está en `config/modelo.yml`. Los parámetros específicos de ESIOS y MIBGAS están separados en `config/esios.yml` y `config/mibgas.yml`. La configuración y los módulos CNMC se conservan como histórico de auditoría, pero no forman parte del pipeline operativo. Los loaders viven en `src/config/`; los módulos de ingesta y calidad específicos están en `src/ingesta/` y `src/calidad/`.
+La configuración común de la ventana está en `config/modelo.yml`. Los parámetros específicos de ESIOS y MIBGAS están separados en `config/esios.yml` y `config/mibgas.yml`. Los loaders viven en `src/config/`; los módulos de ingesta y calidad específicos están en `src/ingesta/` y `src/calidad/`.
 
-CNMC conserva la respuesta original en `data/raw/cnmc/` y sus datos procesados en `data/processed/cnmc/` como histórico. Su producto D+1 deja de tener cobertura después del 31/05/2026. MIBGAS conserva los CSV anuales en `data/raw/mibgas/` y genera `data/processed/mibgas/mibgas_d1.json`, con cobertura validada del 01/10/2024 al 30/09/2026.
+MIBGAS conserva los CSV anuales en `data/raw/mibgas/` y genera `data/processed/mibgas/mibgas_d1.json`, con cobertura validada del 01/10/2024 al 30/09/2026.
 
 Los notebooks se ejecutan desde la raiz del proyecto con el entorno virtual activado, abriendo y ejecutando sus celdas en orden:
 
 - `notebooks/01_ingesta_mibgas.ipynb`: descarga los CSV anuales oficiales de MIBGAS.
 - `notebooks/02_calidad_mibgas.ipynb`: filtra D+1 por fecha de entrega, normaliza precios, deduplica y calcula el informe de calidad.
 
-Los notebooks CNMC se conservan como evidencia histórica y no deben ejecutarse como parte del pipeline operativo.
-
-La ingesta real requiere conectividad con CNMC y MIBGAS. Los tests no llaman a las fuentes externas y utilizan respuestas o ficheros simulados.
+La ingesta real requiere conectividad con MIBGAS. Los tests no llaman a las fuentes externas y utilizan respuestas o ficheros simulados.
 
 ### 8.8. Ejecutar las pruebas
-
-Desde la raíz del repositorio y con el entorno virtual activado, en Windows PowerShell:
-
-Para ejecutar todas las pruebas de notebooks:
 
 ```powershell
 python -m unittest discover -s notebooks\tests -p "test_*.py" -v
 ```
 
-En Linux o macOS, usa `/` en lugar de `\` en las rutas. Las pruebas de ingesta escriben en directorios temporales y los eliminan automáticamente al terminar; no modifican `data/raw` ni descargan datos reales.
+Las pruebas escriben en directorios temporales y no descargan datos reales.
 
 ### 8.9. Dashboard Streamlit (opcional)
 

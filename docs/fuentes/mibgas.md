@@ -51,7 +51,7 @@ La cobertura alcanza el final de la ventana objetivo del modelo, el **30/09/2026
 
 ## Decisión frente a CNMC
 
-MIBGAS es la única fuente operativa de producción para D+1. CNMC fue retirada porque representa el mismo ámbito de mercado, pero no entrega exactamente los mismos precios, termina el 31/05/2026 y no completa la ventana del modelo hasta el 30/09/2026. Los artefactos CNMC existentes se conservan solo como histórico de auditoría; no se mezclan con esta serie ni se incorporan nuevas descargas CNMC. La comparación está documentada en [`docs/fuentes/comparacion_cnmc_mibgas.md`](comparacion_cnmc_mibgas.md).
+MIBGAS es la única fuente operativa de producción para D+1. CNMC fue retirada porque representa el mismo ámbito de mercado, pero no entrega exactamente los mismos precios, termina el 31/05/2026 y no completa la ventana del modelo hasta el 30/09/2026. Sus archivos operativos se eliminaron después de conservar el resultado de la comparación y la decisión en [`docs/fuentes/comparacion_cnmc_mibgas.md`](comparacion_cnmc_mibgas.md).
 
 ## Ejecución
 

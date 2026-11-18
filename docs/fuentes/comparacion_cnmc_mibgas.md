@@ -6,14 +6,11 @@ Antes de retirar CNMC se comparó su recurso `producto_diario_d1` con la serie M
 
 ## Método
 
-Se utilizaron los outputs procesados existentes:
-
-- `data/processed/cnmc/cnmc_diario.json`, únicamente `source_resource == "producto_diario_d1"`.
-- `data/processed/mibgas/mibgas_d1.json`.
+Se utilizaron los outputs procesados disponibles localmente en ese momento. Del recurso CNMC se conservaron únicamente los registros con `source_resource == "producto_diario_d1"`. Estos datos pertenecían a la carpeta `data/`, que no se versiona, y ya no forman parte del estado actual del proyecto.
 
 La comparación se realizó por `fecha_negociacion`, porque el output CNMC no conserva una fecha de entrega para este recurso. Se comparó `precio_eur_mwh` y se calcularon coincidencias exactas y diferencias absolutas.
 
-Código reproducible utilizado:
+El siguiente código documenta la comparación realizada antes de retirar CNMC. No es ejecutable con el estado actual del repositorio sin recuperar previamente esos datos históricos:
 
 ```python
 import json
@@ -74,13 +71,4 @@ La comparación usando `fecha_entrega` como clave produce un resultado aún meno
 
 ## Decisión
 
-CNMC y MIBGAS representan el mismo ámbito de mercado y el mismo producto D+1, con precios muy próximos en términos agregados, pero **no son copias exactas**. Por ello, la retirada de CNMC no se justifica por una igualdad numérica, sino por la decisión de trabajar con una única fuente canónica.
-
-La decisión se justifica por estos motivos:
-
-1. MIBGAS cubre la ventana completa del modelo hasta el 30/09/2026.
-2. CNMC deja de aportar datos D+1 después del 31/05/2026.
-3. MIBGAS es la fuente oficial directa del producto que se quiere modelizar.
-4. Mantener ambas ingestas añade complejidad y una segunda serie con discrepancias sin un uso productivo definido.
-
-CNMC puede eliminarse del pipeline y de los datos operativos, siempre que este informe se conserve como registro de la comparación y de la decisión. No debe afirmarse que ambas fuentes entregan exactamente el mismo precio.
+Se mantuvo MIBGAS como única fuente operativa D+1 porque cubre todo el periodo del modelo hasta el 30/09/2026, mientras que CNMC solo llega hasta el 31/05/2026. Además, MIBGAS es la fuente oficial directa del producto utilizado y mantener ambas ingestas añadiría complejidad sin una necesidad operativa concreta. Aunque los precios son próximos, no son idénticos; por ello, la retirada de CNMC responde a cobertura y simplicidad operativa, no a una igualdad exacta entre las series. Los componentes CNMC se eliminaron tras conservar esta comparación como registro de la decisión.
