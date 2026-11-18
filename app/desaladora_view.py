@@ -100,17 +100,27 @@ def formula_legend(cfg: dict, year: int) -> pd.DataFrame:
     contract = cfg["contrato"]
     rows = [
         ("PH", "Precio final de energía de la demo", "Resultado calculado", "Derivado; no factura"),
-        ("PHM", "Precio del mercado diario", "REData · media horaria", "Dato de mercado; aproximación horaria"),
+        ("PHM", "Precio del mercado diario", "Perfil sintético de prueba", "Precios ilustrativos; fuente real prevista: REData/OMIE"),
     ]
     for symbol, meaning, key, origin in [
-        ("Pc", "Pagos por capacidad", "pc_eur_mwh", "Importe supuesto"),
-        ("Sc", "Sobrecostes de gestión de la red", "sc_eur_mwh", "Importe supuesto"),
-        ("Dsv", "Coste de desvíos de energía", "dsv_eur_mwh", "Importe supuesto"),
-        ("GdO", "Garantías de origen renovable", "gdo_eur_mwh_por_trimestre", "Histórico publicado; criterio fiscal supuesto"),
-        ("POsOm", "Operadores REE y OMIE", "posom_eur_mwh", "Importe supuesto"),
-        ("Perd", "Coeficiente de pérdidas", "perdidas_fraccion", "Coeficiente supuesto"),
-        ("FE", "Aportación al fondo de eficiencia energética", "fe_eur_mwh", "Importe supuesto"),
-        ("F", "Franja o margen de la cooperativa", "f_eur_mwh", "Supuesto para 6.2TD; referencia 6.1TD"),
+         ("Pc", "Pagos por capacidad", "pc_eur_mwh",
+         "BOE 2026 (P1-P5); P6 provisional"),
+        ("Sc", "Sobrecostes del sistema", "sc_eur_mwh",
+         "Hipótesis de demo; pendiente serie horaria REE"),
+        ("Dsv", "Coste de desvíos", "dsv_eur_mwh",
+         "Hipótesis; fórmula Som y factor 14 % publicados"),
+        ("GdO", "Garantías de origen renovable",
+         "gdo_eur_mwh_por_trimestre",
+         "Histórico trimestral oficial Som Energia"),
+        ("POsOm", "Operadores REE y OMIE", "posom_eur_mwh",
+         "Derivado de importes regulados REE + OMIE 2026"),
+        ("Perd", "Pérdidas del sistema", "perdidas_fraccion",
+         "Hipótesis 4 %; pendiente corrector horario REE"),
+        ("FE", "Fondo Nacional de Eficiencia Energética",
+         "fe_eur_mwh",
+         "Hipótesis; repercusión Som Energia no confirmada"),
+        ("F", "Margen comercial Som Energia", "f_eur_mwh",
+         "Referencia pública 6.1TD; extrapolada a 6.2TD"),
     ]:
         if key == "gdo_eur_mwh_por_trimestre":
             label = " / ".join(
@@ -202,9 +212,13 @@ def render_hour_formula(hour: pd.Series) -> None:
         + r"\\ &= \boxed{" + number(hour["precio_indexado_eur_mwh"]) + r"\ \text{EUR/MWh}}\end{aligned}"
     )
     st.caption(
-        "Valores utilizados en el cálculo de esa hora, redondeados para mostrarlos. "
-        "PHM: media horaria REData. PTD/CA: regulados. GdO: histórico publicado, criterio fiscal supuesto. "
-        "Pc, Sc, Dsv, POsOm, FE, F y Perd: supuestos. 1,015: factor público Som. Antes de impuestos."
+        "Valores aplicados al cálculo de esta hora. "
+        "Pc, peajes y cargos: referencias regulatorias de 2026. "
+        "POsOm: derivado de importes regulados REE y OMIE. "
+        "GdO: histórico publicado por Som Energia. "
+        "Sc, Dsv, FE y pérdidas: hipótesis provisionales. "
+        "F: referencia pública 6.1TD extrapolada a 6.2TD. "
+        "No representa una factura real."
     )
     breakdown = pd.DataFrame({
         "Símbolo": ["PHM", "Pc", "Sc", "Dsv", "GdO", "POsOm", "Perd", "FE", "F", "1,015", "PTD", "CA"],

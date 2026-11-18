@@ -22,6 +22,7 @@ from desaladora_data import DESALADORA_S3_URI, load_desaladora_tables
 from desaladora_view import SOM_SCOPE, render_case, render_indexed_schedule
 from formatting import format_eur, format_number, format_pct
 from industry_tariffs import RUTA_CONFIG, recompute_case
+from local_desaladora import calculate_local, csv_prices, example_prices, DEFAULT_DATE, DEMO_DAYS
 from industry_view import render_desal_demo, render_industries
 
 
@@ -563,6 +564,43 @@ def main() -> None:
             cached_temperature_table.clear()
             st.rerun()
         st.caption("Caché: 5 minutos. Actualiza después de publicar una ejecución completa.")
+    # Local demo is isolated from the S3 publishing flow and uses the current YAML.
+    if view == VIEWS[3]:
+        st.caption("Modo local para la demostración: no requiere S3 ni credenciales AWS.")
+        choice = st.radio(
+            "Precios de mercado", ["Ejemplo de prueba (sintético)", "CSV local", "Resultados S3"],
+            horizontal=True, key="desal_source",
+        )
+        if choice != "Resultados S3":
+            try:
+                if choice == "CSV local":
+                    uploaded = st.file_uploader(
+                        "CSV con datetime_utc (UTC) y precio_eur_mwh (€/MWh)",
+                        type="csv", key="desal_local_csv",
+                    )
+                    if uploaded is None:
+                        st.info("Carga un CSV con precios históricos para calcular la demo. No se consulta S3.")
+                        return
+                    prices = csv_prices(uploaded.getvalue())
+                    st.success(f"Precios cargados desde archivo local: {uploaded.name} (pendiente de verificar su origen).")
+                else:
+                    prices = example_prices(DEFAULT_DATE, DEMO_DAYS)
+                    st.warning(
+                        "Precios de mercado HIPOTÉTICOS, generados artificialmente (NO REData, OMIE ni predicción). "
+                        f"Simulación reproducible del 01/09/2026 al 18/11/2026 ({DEMO_DAYS} días). "
+                        "Los costes y ahorros son exclusivamente ilustrativos."
+                    )
+                metadata_local, plan_local, summary_local, monthly_local = calculate_local(prices)
+            except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as error:
+                st.error(f"No se pudo calcular la demo local: {error}")
+                return
+            render_desal_demo(
+                plan_local, summary_local,
+                lambda: render_case(metadata_local, summary_local), monthly_local,
+                show_daily_trend=True,
+            )
+            st.caption("La extrapolación anual a partir de los días seleccionados es orientativa y NO constituye un ahorro validado.")
+            return
     som = view == VIEWS[3] or (st.session_state.cost_mode == "som" and view != VIEWS[4])
     source = DESALADORA_S3_URI if som else GOLD_S3_URI
     metadata = None

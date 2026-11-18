@@ -469,7 +469,7 @@ def render_industries(plan: pd.DataFrame, dates: list[date]) -> None:
         method_section(tariff, prices_day)
 
 
-def render_desal_demo(plan: pd.DataFrame, summary: pd.DataFrame, details, monthly: pd.DataFrame | None = None) -> None:
+def render_desal_demo(plan: pd.DataFrame, summary: pd.DataFrame, details, monthly: pd.DataFrame | None = None, show_daily_trend: bool = False) -> None:
     """View 04: published case 4 run (Som price, S0/S1 already optimised by the pipeline), no recalculation."""
     styles()
     cfg = config()
@@ -517,7 +517,7 @@ def render_desal_demo(plan: pd.DataFrame, summary: pd.DataFrame, details, monthl
         plant_s0 = optimum["coste_energia_planta_baseline_eur"].sum()
         daily = saving / len(optimum)
         cards = [
-            ("Ahorro anual estimado", f"{number(daily * plant['dias_operacion_ano'], 0)} €",
+            ("Extrapolación anual ilustrativa" if show_daily_trend else "Ahorro anual estimado", f"{number(daily * plant['dias_operacion_ano'], 0)} €",
              f"{number(daily, 0)} €/día · {plant['dias_operacion_ano']} días/año", True),
             ("Ahorro en el periodo", f"{number(saving, 0)} €",
              f"{dates[0]:%d/%m} – {dates[-1]:%d/%m/%Y} · {len(optimum)} días", False),
@@ -555,31 +555,43 @@ def render_desal_demo(plan: pd.DataFrame, summary: pd.DataFrame, details, monthl
         </div>
         """)
         if monthly is not None:
-            savings_sections(monthly)
+            savings_sections(monthly, optimum if show_daily_trend else None)
         with st.expander("Contrato y datos"):
             details()
 
 
-def savings_sections(monthly: pd.DataFrame) -> None:
+def savings_sections(monthly: pd.DataFrame, daily: pd.DataFrame | None = None) -> None:
     """Cumulative saving and monthly contribution, same layout as view 03."""
     monthly = monthly[monthly["days"] > 0]
     if monthly.empty:
         return
     names = [f"{MONTHS[int(m[5:7]) - 1]} {m[:4]}" for m in monthly["month"]]
+    daily_values = None
+    if daily is not None and len(daily) > 1:
+        daily_values = daily.sort_values("fecha_local").copy()
+        daily_values["ahorro_acumulado_eur"] = daily_values["ahorro_energia_eur"].cumsum()
     trend, contribution = st.columns([1.6, 1])
     with trend:
-        markup('<div class="desal-heading"><h2>Ahorro acumulado</h2>'
-               '<p>EUR · acumulación desde el inicio del período seleccionado</p></div>')
+        title_detail = "EUR · acumulación diaria del periodo" if daily_values is not None else "EUR · acumulación por mes"
+        markup(f'<div class="desal-heading"><h2>Ahorro acumulado</h2><p>{title_detail}</p></div>')
+        if daily_values is not None:
+            labels = [d.strftime("%d/%m") for d in daily_values["fecha_local"]]
+            cumulative = daily_values["ahorro_acumulado_eur"].tolist()
+            axis_x = list(range(1, len(labels) + 1))
+        else:
+            labels = names
+            cumulative = monthly["saving_eur"].cumsum().tolist()
+            axis_x = list(range(1, len(labels) + 1))
         figure = go.Figure(go.Scatter(
-            x=list(range(len(names) + 1)), y=[0] + monthly["saving_eur"].cumsum().tolist(),
-            customdata=["Inicio"] + names, mode="lines+markers", fill="tozeroy", fillcolor="#eaf1f7",
-            line=dict(color="#547d99", width=3), marker=dict(size=8, color="#547d99", line=dict(color="white", width=2)),
+            x=[0] + axis_x, y=[0] + cumulative,
+            customdata=["Inicio"] + labels, mode="lines+markers", fill="tozeroy", fillcolor="#eaf1f7",
+            line=dict(color="#547d99", width=3), marker=dict(size=7, color="#547d99", line=dict(color="white", width=1)),
             hovertemplate="%{customdata}: %{y:,.2f} € acumulados<extra></extra>",
         ))
         figure.update_layout(
             height=360, margin=dict(l=55, r=15, t=18, b=35), paper_bgcolor="#f4f6f2", plot_bgcolor="#f4f6f2", showlegend=False,
             font=dict(family="Aptos, Segoe UI, sans-serif", color="#758581", size=11),
-            xaxis=dict(tickmode="array", tickvals=list(range(1, len(names) + 1)), ticktext=names, showgrid=False, zeroline=False, fixedrange=True),
+            xaxis=dict(tickmode="array", tickvals=(axis_x[::max(1, len(axis_x) // 10)] + ([axis_x[-1]] if len(axis_x) > 10 and axis_x[-1] not in axis_x[::max(1, len(axis_x) // 10)] else [])) if daily_values is not None else axis_x, ticktext=(labels[::max(1, len(labels) // 10)] + ([labels[-1]] if len(labels) > 10 and labels[-1] not in labels[::max(1, len(labels) // 10)] else [])) if daily_values is not None else labels, tickangle=-45 if daily_values is not None else 0, showgrid=False, zeroline=False, fixedrange=True),
             yaxis=dict(title="EUR", rangemode="tozero", gridcolor="#dce4df", zeroline=False, fixedrange=True),
         )
         st.plotly_chart(figure, config={"displayModeBar": False})
