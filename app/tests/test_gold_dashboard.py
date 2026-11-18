@@ -321,6 +321,76 @@ class GoldDashboardTests(unittest.TestCase):
         app.selectbox(key="analysis_period").set_value("Todo el período disponible").run()
         self.assertIn("Diciembre 2025", "\n".join(item.value for item in app.markdown))
 
+    @staticmethod
+    def eur0(value: float) -> str:
+        return f"{value:,.0f}".replace(",", ".") + " €"
+
+    @staticmethod
+    def som_prices(tariff_delta: float = 0.0) -> list[float]:
+        """Som 6.2TD price of the fixture holiday (all P6, spot 1..24), computed with the team model."""
+        from src.config_loader import cargar_config
+        from src.desaladora import precios_indexados
+        from src.tarifas_6_2td import RUTA_CONFIG
+
+        hours = pd.date_range("2026-01-01", periods=24, freq="h", tz="Europe/Madrid")
+        day = pd.DataFrame({"datetime_local": hours, "precio_eur_mwh": [float(h) for h in range(1, 25)]})
+        prices = precios_indexados(day, cargar_config(RUTA_CONFIG)[0])["precio_indexado_eur_mwh"]
+        return [price + tariff_delta for price in prices]
+
+    def open_industry_view(self, mode: str = "tariff") -> AppTest:
+        app = self.run_app(self.load_tables(), mode=mode)
+        app.radio(key="view").set_value("Simulador industrial").run()
+        app.selectbox(key="industry_date").set_value(pd.Timestamp("2026-01-01").date()).run()
+        self.assertEqual(list(app.exception), [])
+        return app
+
+    def test_industry_view_uses_som_price_and_tariff_of_each_sector(self) -> None:
+        sys.path.insert(0, str(APP_DIR.parent))
+        app = self.open_industry_view()
+        energy = 30.0
+        # Case 4 from config_desaladora.yaml: 30 MWh spread evenly from 08:00 to 20:00 (2,5 MWh/h).
+        self.assertEqual(app.radio(key="industry_tariff").value, "6.2TD")
+        markup = "\n".join(item.value for item in app.markdown)
+        self.assertIn(self.eur0(energy / 12 * sum(self.som_prices()[8:20])), markup)
+        self.assertIn("todo P6", markup)
+        # 6.1TD: same Som energy terms, P6 toll + charge 0,029 + 1,559 instead of 0,020 + 0,732 (BOE 2026).
+        app.radio(key="industry_tariff").set_value("6.1TD").run()
+        delta = (0.029 + 1.559) - (0.020 + 0.732)
+        self.assertIn(self.eur0(energy / 12 * sum(self.som_prices(delta)[8:20])), "\n".join(item.value for item in app.markdown))
+        expected = {"bombeo": "6.1TD", "cemento": "6.3TD", "metal": "6.4TD", "frio": "6.1TD",
+                    "super": "6.1TD", "flota": "6.1TD", "desal": "6.2TD"}
+        for sector, tariff in expected.items():
+            with self.subTest(sector=sector):
+                app.radio(key="industry_sector").set_value(sector).run()
+                self.assertEqual(list(app.exception), [])
+                self.assertEqual(app.radio(key="industry_tariff").value, tariff)
+                markup = "\n".join(item.value for item in app.markdown)
+                self.assertIn("Ahorro anual estimado", markup)
+                self.assertNotIn("No se puede programar", markup)
+        app.number_input(key="industry_desal_limit").set_value(0.1).run()
+        markup = "\n".join(item.value for item in app.markdown)
+        self.assertIn("no cabe", markup)
+        self.assertNotIn("Ahorro anual estimado", markup)
+
+    def test_industry_view_fleet_charges_on_arrival_and_respects_work_hours(self) -> None:
+        sys.path.insert(0, str(APP_DIR.parent))
+        app = self.open_industry_view()
+        app.radio(key="industry_sector").set_value("flota").run()
+        markup = "\n".join(item.value for item in app.markdown)
+        self.assertIn("Cargar al llegar", markup)
+        prices = self.som_prices((0.029 + 1.559) - (0.020 + 0.732))
+        # 40 vans × 120 km × 22 kWh/100 km = 1.056 MWh at 0.44 MW from 18:00: 0.44 + 0.44 + 0.176 MWh.
+        self.assertIn(self.eur0(0.44 * prices[18] + 0.44 * prices[19] + 0.176 * prices[20]), markup)
+        # Cheapest hours while at base (18:00-07:00) on the same calendar day: 00:00-02:00.
+        self.assertIn(self.eur0(0.44 * prices[0] + 0.44 * prices[1] + 0.176 * prices[2]), markup)
+        app.checkbox(key="industry_flota_in_base").uncheck().run()
+        self.assertIn("límite teórico", "\n".join(item.value for item in app.markdown))
+
+    def test_industry_view_ignores_sidebar_cost_mode(self) -> None:
+        tariff = "\n".join(item.value for item in self.open_industry_view("tariff").markdown)
+        market = "\n".join(item.value for item in self.open_industry_view("market").markdown)
+        self.assertEqual(tariff, market)
+
     def test_single_year_uses_gold_total_once_and_disables_invalid_dates(self) -> None:
         self.summary = self.summary[self.summary["fecha_local"].map(lambda value: value.year == 2026)].copy()
         self.plan = self.plan[self.plan["fecha_local"].map(lambda value: value.year == 2026)].copy()

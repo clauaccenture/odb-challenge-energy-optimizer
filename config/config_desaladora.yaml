@@ -31,11 +31,11 @@ planta:
  
 carga_flexible:
   energia_diaria_mwh:
-    value: 30
+    value: 20
     source_type: hypothesis
     nota: "Definicion del caso (20 % del consumo estimado)"
   limite_mwh_hora:
-    value: 7
+    value: 9
     source_type: hypothesis
     nota: "Equivale a 7 MW medios; viabilidad depende de potencia contratada (no disponible)"
  
@@ -43,6 +43,7 @@ baseline_s0:
   mwh_hora:
     value: 2.5
     source_type: hypothesis
+    nota: "En la app se deriva como energia_diaria_mwh / (hora_fin - hora_inicio)"
   hora_inicio:
     value: 8
     source_type: hypothesis
@@ -144,7 +145,8 @@ componentes:
 # Datos regulados por tarifa y año. Fuente unica: src/tarifas_6_2td.py solo los lee de aqui.
 tarifas_reguladas:
   6.2TD:
-    calendario:
+    # Circular 3/2020: el calendario P1-P6 es el mismo para todos los peajes 6.xTD (se reutiliza abajo).
+    calendario: &calendario_6xtd
       p6_antes_de_hora:
         value: 8
         source_type: documented
@@ -182,13 +184,55 @@ tarifas_reguladas:
           source_type: documented
           nota: "EUR/MWh (el BOE publica EUR/kWh). Resolucion CNMC 18/12/2025, anexo I (BOE-A-2025-26348)"
         cargos_energia_eur_mwh:
-          value: {P1: 9.144, P2: 6.773, P3: 3.658, P4: 1.829, P5: 1.172, P6: 0.732}
+          value: {P1: 10.144, P2: 6.773, P3: 3.658, P4: 1.829, P5: 1.172, P6: 0.732}
           source_type: documented
           nota: "EUR/MWh. Orden TED/1524/2025, segmento 4 = 6.2TD (BOE-A-2025-26705)"
-        festivos_nacionales:
+        festivos_nacionales: &festivos_2026
           value: [2026-01-01, 2026-01-06, 2026-05-01, 2026-08-15, 2026-10-12, 2026-11-01, 2026-12-06, 2026-12-08, 2026-12-25]
           source_type: documented
           nota: "Fecha fija y no sustituibles, mas el 6 de enero. Sin Viernes Santo (no tiene fecha fija). Sabados, domingos y festivos: todo el dia P6"
+  # Resto de peajes de alta tension, usados por el simulador industrial de la app (vista 5).
+  # Peaje = termino de energia del peaje de transporte y distribucion (Res. CNMC 18/12/2025, anexo I,
+  # BOE-A-2025-26348). Cargos: Orden TED/1524/2025 (BOE-A-2025-26705), segmentos 3 (6.1TD), 5 (6.3TD), 6 (6.4TD).
+  6.1TD:
+    calendario: *calendario_6xtd
+    anios:
+      2026:
+        peajes_energia_eur_mwh:
+          value: {P1: 26.785, P2: 12.281, P3: 5.133, P4: 2.780, P5: 0.120, P6: 0.029}
+          source_type: documented
+          nota: "EUR/MWh. Resolucion CNMC 18/12/2025, anexo I (BOE-A-2025-26348). Tension >1 kV y <30 kV"
+        cargos_energia_eur_mwh:
+          value: {P1: 19.489, P2: 14.436, P3: 7.795, P4: 3.898, P5: 2.499, P6: 1.559}
+          source_type: documented
+          nota: "EUR/MWh. Orden TED/1524/2025, segmento 3 = 6.1TD (BOE-A-2025-26705)"
+        festivos_nacionales: *festivos_2026
+  6.3TD:
+    calendario: *calendario_6xtd
+    anios:
+      2026:
+        peajes_energia_eur_mwh:
+          value: {P1: 11.279, P2: 5.324, P3: 1.994, P4: 0.995, P5: 0.048, P6: 0.014}
+          source_type: documented
+          nota: "EUR/MWh. Resolucion CNMC 18/12/2025, anexo I (BOE-A-2025-26348). Tension >=72,5 kV y <145 kV"
+        cargos_energia_eur_mwh:
+          value: {P1: 7.496, P2: 5.552, P3: 2.998, P4: 1.499, P5: 0.961, P6: 0.600}
+          source_type: documented
+          nota: "EUR/MWh. Orden TED/1524/2025, segmento 5 = 6.3TD (BOE-A-2025-26705)"
+        festivos_nacionales: *festivos_2026
+  6.4TD:
+    calendario: *calendario_6xtd
+    anios:
+      2026:
+        peajes_energia_eur_mwh:
+          value: {P1: 8.427, P2: 3.946, P3: 1.458, P4: 0.716, P5: 0.038, P6: 0.004}
+          source_type: documented
+          nota: "EUR/MWh. Resolucion CNMC 18/12/2025, anexo I (BOE-A-2025-26348): solo transporte. Tension >=145 kV"
+        cargos_energia_eur_mwh:
+          value: {P1: 2.848, P2: 2.109, P3: 1.139, P4: 0.570, P5: 0.365, P6: 0.228}
+          source_type: documented
+          nota: "EUR/MWh. Orden TED/1524/2025, segmento 6 = 6.4TD (BOE-A-2025-26705)"
+        festivos_nacionales: *festivos_2026
 
 # Los importes estimados NO son una oferta de Som Energia ni estimaciones calibradas.
 # Todos los componentes monetarios se expresan en EUR/MWh, antes de impuestos.
@@ -209,34 +253,39 @@ contrato:
     value: 1.015
     source_type: documented
     nota: "Factor de la formula publica; no es IVA ni IEE."
+  # Valores recuperados de Jaime (commit 5763025, perdidos al mergear develop en el PR #7).
   pc_eur_mwh:
-    value: 0.5
+    value: {P1: 0.465, P2: 0.213, P3: 0.142, P4: 0.107, P5: 0.107, P6: 0.107}
     source_type: hypothesis
-    nota: "Constante ilustrativa, no valor regulado verificado."
+    nota: "Pc. Orden TED/1524/2025 (BOE-A-2025-26705), apartado Tercero, segmento 4, EUR/kWh x 1000. P6 = P5 SUPUESTO, verificar en el BOE"
   sc_eur_mwh:
-    value: 10.0
+    value: 15.78
+    rango: [12.6, 18.9]
     source_type: hypothesis
-    nota: "Aproximacion constante de costes de red; no reproduce servicios de ajuste reales."
+    nota: "Sc. Servicios de ajuste, media 2025 (PDF Precio_electricidad_industrial_v3_2, calculo propio). Promedio constante, no horario"
   dsv_eur_mwh:
-    value: 2.0
+    value: 0.0
     source_type: hypothesis
-    nota: "Coste absoluto supuesto. NO es el 14 % publicado ni se aplica como porcentaje del spot."
+    nota: "Dsv. Sin dato separado: se considera incluido en Sc (agregado de REE). Cambiar si se obtiene su serie"
   posom_eur_mwh:
-    value: 0.2
+    value: 0.24
+    rango: [0.2, 0.3]
     source_type: hypothesis
-    nota: "Constante ilustrativa conjunta de operadores; no liquidacion oficial."
+    nota: "POsOm. Operadores OMIE + REE, segun el PDF del companero. Contrastar con la CNMC"
   perdidas_fraccion:
     value: 0.04
     source_type: hypothesis
     nota: "4 % ilustrativo; sustituir por coeficientes REE de 6.2TD para una replica contractual."
   fe_eur_mwh:
-    value: 2.0
+    value: 2.44
     source_type: hypothesis
-    nota: "Aportacion ilustrativa; no obligacion individual confirmada de la comercializadora."
+    nota: "FE. FNEE 0,0024374639 EUR/kWh (Orden TED/133/2026) x 1000. Verificar en el BOE"
   f_eur_mwh:
-    value: 16.0
+    value: 10.0
+    rango: [3, 20]
+    escenarios: {bajo: 3, central: 10, alto: 17}
     source_type: hypothesis
-    nota: "Referencia publica 6.1TD de 0,016 EUR/kWh; extrapolada a 6.2TD, no oferta confirmada."
+    nota: "F. Margen comercial, NO publicado. Rango del PDF (3-20); 17 = Candela 6.1TD. Pendiente de validar"
   gdo_eur_mwh_por_trimestre:
     t1:
       value: 0.650

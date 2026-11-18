@@ -1,0 +1,96 @@
+# Simulador industrial (vista 05). Fuente principal de los parametros de cada sector.
+# Cada parametro: value, source_type (documented | derived | hypothesis) y nota. Los campos
+# etiqueta/min/max/paso solo describen el control de la app. Valores de referencia, NO de una planta real.
+# Desalacion no se define aqui: se lee de config_desaladora.yaml (caso 4).
+version_config: 1
+
+sectores:
+  bombeo:
+    nombre: "Bombeo de agua"
+    icono: pump
+    resumen: "Bombea a depositos de regulacion cuando la energia es barata."
+    tarifa: {value: "6.1TD", source_type: hypothesis, nota: "Estaciones de bombeo habituales en media tension (15-20 kV)"}
+    dias_operacion_ano: {value: 365, source_type: hypothesis}
+    potencia_flexible_mw: {value: 2.0, source_type: hypothesis, nota: "Bombas desplazables, no toda la estacion"}
+    operacion_actual: {value: [6, 22], source_type: hypothesis, nota: "Bombeo durante el dia, siguiendo la demanda"}
+    horas_disponibles: {value: [0, 0], source_type: hypothesis, nota: "Los depositos permiten bombear a cualquier hora"}
+    formula: "volumen x 9,81 x altura / (rendimiento x 3,6e6) x desplazable"
+    parametros:
+      volumen_m3_dia: {value: 40000, etiqueta: "Volumen · m³/día", min: 0, max: 1000000, paso: 2000, source_type: hypothesis}
+      altura_m: {value: 80, etiqueta: "Altura · m", min: 0, max: 1000, paso: 5, source_type: hypothesis}
+      rendimiento: {value: 0.7, etiqueta: "Rendimiento", min: 0.3, max: 0.95, paso: 0.05, source_type: hypothesis, nota: "Bomba + motor"}
+      desplazable_pct: {value: 40, etiqueta: "Desplazable · %", min: 0, max: 100, paso: 5, source_type: hypothesis, nota: "Limitado por niveles minimos de los depositos"}
+
+  cemento:
+    nombre: "Cemento"
+    icono: silo
+    resumen: "Mueve la molienda; los silos guardan la produccion. El horno no se para."
+    tarifa: {value: "6.3TD", source_type: hypothesis, nota: "Fabrica integral conectada a 132 kV"}
+    dias_operacion_ano: {value: 330, source_type: hypothesis}
+    potencia_flexible_mw: {value: 6.0, source_type: hypothesis, nota: "Potencia de los molinos"}
+    operacion_actual: {value: [6, 22], source_type: hypothesis, nota: "Molienda a dos turnos"}
+    horas_disponibles: {value: [0, 0], source_type: hypothesis}
+    formula: "MW molinos x horas x desplazable"
+    parametros:
+      molinos_mw: {value: 6.0, etiqueta: "Molinos · MW", min: 0, max: 100, paso: 0.5, source_type: hypothesis}
+      horas_dia: {value: 16, etiqueta: "Molienda · h/día", min: 0, max: 24, paso: 1, source_type: hypothesis}
+      desplazable_pct: {value: 30, etiqueta: "Desplazable · %", min: 0, max: 100, paso: 5, source_type: hypothesis, nota: "Capacidad de silos y turnos"}
+
+  metal:
+    nombre: "Metalurgia"
+    icono: metal
+    resumen: "Programa las coladas del horno de arco electrico."
+    tarifa: {value: "6.4TD", source_type: hypothesis, nota: "Acerias de horno de arco conectadas a 220-400 kV"}
+    dias_operacion_ano: {value: 300, source_type: hypothesis}
+    potencia_flexible_mw: {value: 80.0, source_type: hypothesis, nota: "Horno de arco medio (50-100 MVA)"}
+    operacion_actual: {value: [0, 0], source_type: hypothesis, nota: "Coladas repartidas en tres turnos"}
+    horas_disponibles: {value: [0, 0], source_type: hypothesis}
+    formula: "t/dia x kWh/t x coladas desplazables"
+    parametros:
+      acero_t_dia: {value: 1500, etiqueta: "Acero · t/día", min: 0, max: 20000, paso: 100, source_type: hypothesis}
+      horno_kwh_t: {value: 420, etiqueta: "Horno · kWh/t", min: 300, max: 700, paso: 10, source_type: documented, nota: "Rango tipico 350-500 kWh/t"}
+      desplazable_pct: {value: 10, etiqueta: "Coladas desplazables · %", min: 0, max: 100, paso: 5, source_type: hypothesis, nota: "Encaje con colada continua y laminacion: margen pequeño"}
+
+  frio:
+    nombre: "Frío industrial"
+    icono: cold
+    resumen: "Preenfria aprovechando la inercia termica del producto."
+    tarifa: {value: "6.1TD", source_type: hypothesis, nota: "Almacen frigorifico en media tension"}
+    dias_operacion_ano: {value: 365, source_type: hypothesis}
+    potencia_flexible_mw: {value: 0.8, source_type: hypothesis}
+    operacion_actual: {value: [0, 0], source_type: hypothesis, nota: "Compresores repartidos en el dia"}
+    horas_disponibles: {value: [0, 0], source_type: hypothesis}
+    formula: "kW x 24 x uso medio x desplazable"
+    parametros:
+      compresores_kw: {value: 800, etiqueta: "Compresores · kW", min: 0, max: 100000, paso: 50, source_type: hypothesis}
+      uso_pct: {value: 50, etiqueta: "Uso medio · %", min: 0, max: 100, paso: 5, source_type: hypothesis}
+      desplazable_pct: {value: 15, etiqueta: "Desplazable · %", min: 0, max: 100, paso: 1, source_type: hypothesis, nota: "2-4 h sin afectar al producto (LBNL)"}
+
+  super:
+    nombre: "Supermercados"
+    icono: cart
+    resumen: "Programa refrigeracion y climatizacion de las tiendas."
+    tarifa: {value: "6.1TD", source_type: hypothesis, nota: "Tiendas grandes en media tension; las pequeñas suelen ser 3.0TD"}
+    dias_operacion_ano: {value: 360, source_type: hypothesis}
+    potencia_flexible_mw: {value: 1.0, source_type: hypothesis}
+    operacion_actual: {value: [9, 21], source_type: hypothesis, nota: "Horario de apertura"}
+    horas_disponibles: {value: [0, 0], source_type: hypothesis}
+    formula: "tiendas x m² x 400 kWh/m²·año / 365 x desplazable"
+    parametros:
+      tiendas: {value: 20, etiqueta: "Tiendas", min: 0, max: 10000, paso: 1, source_type: hypothesis}
+      sala_m2: {value: 1500, etiqueta: "Sala · m²", min: 0, max: 100000, paso: 100, source_type: hypothesis}
+      desplazable_pct: {value: 10, etiqueta: "Desplazable · %", min: 0, max: 100, paso: 1, source_type: hypothesis}
+
+  flota:
+    nombre: "Flota eléctrica"
+    icono: van
+    resumen: "Carga los vehiculos en base, en las horas mas baratas."
+    tarifa: {value: "6.1TD", source_type: hypothesis, nota: "Base de recarga en media tension"}
+    dias_operacion_ano: {value: 250, source_type: hypothesis, nota: "Dias laborables"}
+    operacion_actual: {value: [18, 7], source_type: hypothesis, nota: "Llega a base a las 18:00 y sale a las 07:00; hoy carga al llegar"}
+    vehiculos:
+      turismo: {nombre: "Turismo", kwh_100km: 16, km_dia: 80, cargador_kw: 7.4, bateria_kwh: 60}
+      furgoneta: {nombre: "Furgoneta", kwh_100km: 22, km_dia: 120, cargador_kw: 11, bateria_kwh: 75}
+      furgon: {nombre: "Furgón grande", kwh_100km: 30, km_dia: 150, cargador_kw: 11, bateria_kwh: 90}
+      camion: {nombre: "Camión 7,5 t", kwh_100km: 80, km_dia: 160, cargador_kw: 40, bateria_kwh: 200}
+    unidades: {value: 40, source_type: hypothesis}

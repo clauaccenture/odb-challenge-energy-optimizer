@@ -105,9 +105,17 @@ def validar_config(cfg: dict) -> None:
         raise ValueError("Restricciones operativas activas no implementadas; no se ignoraran.")
     if d["consumo_estimado_mwh_dia"] < carga["energia_diaria_mwh"]:
         raise ValueError("La energia flexible supera el consumo total estimado.")
-    for clave in ("factor_formula", "pc_eur_mwh", "sc_eur_mwh", "dsv_eur_mwh",
+    for clave in ("factor_formula", "sc_eur_mwh", "dsv_eur_mwh",
                   "posom_eur_mwh", "perdidas_fraccion", "fe_eur_mwh", "f_eur_mwh"):
         _numero(contrato[clave], f"contrato.{clave}")
+    pc = contrato["pc_eur_mwh"]
+    if isinstance(pc, dict):
+        if set(pc) != set(PERIODOS):
+            raise ValueError("contrato.pc_eur_mwh: por periodo debe definir exactamente P1-P6.")
+        for periodo, valor in pc.items():
+            _numero(valor, f"contrato.pc_eur_mwh.{periodo}")
+    else:
+        _numero(pc, "contrato.pc_eur_mwh")
     if contrato["factor_formula"] != 1.015 or contrato["perdidas_fraccion"] >= 1:
         raise ValueError("Factor de formula distinto de 1.015 o perdidas fuera de [0,1).")
     gdo = contrato["gdo_eur_mwh_por_trimestre"]
@@ -136,8 +144,10 @@ def precios_indexados(dia: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     ]
     p["peaje_energia_eur_mwh"] = p["periodo_tarifario"].map(PEAJES_ENERGIA_EUR_MWH)
     p["cargo_energia_eur_mwh"] = p["periodo_tarifario"].map(CARGOS_ENERGIA_EUR_MWH)
-    for nombre in ("pc", "sc", "dsv", "posom", "fe", "f"):
+    for nombre in ("sc", "dsv", "posom", "fe", "f"):
         p[f"{nombre}_eur_mwh"] = c[f"{nombre}_eur_mwh"]
+    pc = c["pc_eur_mwh"]
+    p["pc_eur_mwh"] = p["periodo_tarifario"].map(pc) if isinstance(pc, dict) else pc
     p["gdo_eur_mwh"] = [
         c["gdo_eur_mwh_por_trimestre"][f"t{(t.month - 1) // 3 + 1}"]
         for t in p["datetime_local"]

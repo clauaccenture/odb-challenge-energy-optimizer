@@ -21,6 +21,8 @@ from data_loader import (
 from desaladora_data import DESALADORA_S3_URI, load_desaladora_tables
 from desaladora_view import SOM_SCOPE, render_case, render_indexed_schedule
 from formatting import format_eur, format_number, format_pct
+from industry_tariffs import RUTA_CONFIG, recompute_case
+from industry_view import render_desal_demo, render_industries
 
 
 st.set_page_config(
@@ -35,7 +37,7 @@ MONTH_NAMES = [
     "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
     "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
 ]
-VIEWS = ["Resumen ejecutivo", "Programación diaria", "Evolución del ahorro", "Caso desaladora"]
+VIEWS = ["Resumen ejecutivo", "Programación diaria", "Evolución del ahorro", "Caso desaladora", "Simulador industrial"]
 COST_MODES = {
     "som": "Desaladora · Som Energia (simulado)",
     "tariff": "Mercado + peajes y cargos 6.2TD",
@@ -528,6 +530,12 @@ def cached_desaladora_tables() -> tuple[dict, pd.DataFrame, pd.DataFrame, pd.Dat
     return load_desaladora_tables()
 
 
+@st.cache_data(ttl=300, max_entries=2, show_spinner="Recalculando el caso desaladora con el YAML actual...")
+def cached_desal_case(config_version: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Published spot prices, S0/S1 recomputed with the current config_desaladora.yaml."""
+    return recompute_case(cached_desaladora_tables()[3])
+
+
 def main() -> None:
     apply_styles()
     with st.sidebar:
@@ -541,18 +549,21 @@ def main() -> None:
         st.segmented_control(
             "Cálculo del coste", list(COST_MODES), key="cost_mode", required=True,
             format_func=COST_MODES.get, width="stretch",
-            disabled=view == VIEWS[3],
+            disabled=view in (VIEWS[3], VIEWS[4]),
             help="Som: S1 reoptimizado con el precio indexado completo. Los otros modos conservan el plan original optimizado por spot.",
         )
         if view == VIEWS[3]:
             st.caption("Esta pantalla consulta siempre el caso Som Energia, independientemente del selector de coste.")
+        if view == VIEWS[4]:
+            st.caption("El simulador calcula siempre el precio indexado Som Energia con la tarifa de acceso de cada industria.")
         if st.button("Actualizar datos de S3"):
             cached_gold_tables.clear()
             cached_desaladora_tables.clear()
+            cached_desal_case.clear()
             cached_temperature_table.clear()
             st.rerun()
         st.caption("Caché: 5 minutos. Actualiza después de publicar una ejecución completa.")
-    som = st.session_state.cost_mode == "som" or view == VIEWS[3]
+    som = view == VIEWS[3] or (st.session_state.cost_mode == "som" and view != VIEWS[4])
     source = DESALADORA_S3_URI if som else GOLD_S3_URI
     metadata = None
     try:
@@ -568,7 +579,7 @@ def main() -> None:
             st.caption("Los resultados del caso no están disponibles. Solicita su actualización antes de consultarlos.")
         st.stop()
     with st.sidebar:
-        if tariff_mode() and not som:
+        if tariff_mode() and not som and view != VIEWS[4]:
             monthly, summary, plan = apply_tariff_scenario(monthly, summary, plan)
             if summary.empty:
                 st.warning("Gold no contiene días con peajes y cargos 6.2TD en el periodo de estudio.")
@@ -588,6 +599,27 @@ def main() -> None:
         """)
         if not som:
             st.caption(f"Origen S3: {source}")
+    if view == VIEWS[3] and metadata is not None:
+        try:
+            plan, summary, monthly = cached_desal_case(RUTA_CONFIG.stat().st_mtime_ns)
+        except (ValueError, KeyError, TypeError, yaml.YAMLError) as error:
+            st.error(f"El YAML actual no permite recalcular el caso desaladora: {error}")
+            st.caption(f"Configuración: {RUTA_CONFIG}")
+            return
+        current = {**metadata, "config_yaml": RUTA_CONFIG.read_text(encoding="utf-8")}
+        render_desal_demo(plan, summary, lambda: render_case(current, summary), monthly)
+        return
+    if view == VIEWS[4]:
+        dates = sorted(summary.loc[
+            (summary["estado_optimizacion"] == "optimo")
+            & (summary["fecha_local"].map(lambda value: value.year) == selected_year),
+            "fecha_local",
+        ].tolist())
+        if not dates:
+            st.warning("No hay días con precios horarios completos en el año seleccionado.")
+            return
+        render_industries(plan, dates)
+        return
     single_year = monthly["month"].str[:4].nunique() == 1
     monthly = monthly[monthly["month"].str[:4] == str(selected_year)].copy()
     summary = summary[summary["fecha_local"].map(lambda value: value.year == selected_year)].copy()
@@ -614,9 +646,6 @@ def main() -> None:
             st.info(f"Cobertura disponible: {len(daily)} días con programación de {calendar_days} días naturales; {calendar_days - len(daily)} sin programación. Motivos disponibles en Caso desaladora. No se anualizan los totales.")
     else:
         st.info(f"Cobertura disponible: {len(daily)} días con programación de {calendar_days} días naturales entre las fechas cargadas; {calendar_days - len(summary)} sin programación publicada. Gold no publica el motivo de las fechas ausentes. Los totales no se anualizan ni representan necesariamente meses completos.")
-    if view == VIEWS[3] and metadata is not None:
-        render_case(metadata, summary)
-        return
     if daily.empty:
         st.warning("No hay días con programación válida en el año seleccionado.")
         st.dataframe(summary, hide_index=True, width="stretch")

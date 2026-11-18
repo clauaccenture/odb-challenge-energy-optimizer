@@ -116,7 +116,7 @@ class DesaladoraTests(unittest.TestCase):
         cfg = self.config()
         precios = precios_indexados(silver_dia("2026-01-15", [-100.0] * 24), cfg)
         # 01:00 = P6: todos los importes son EUR/MWh, antes de impuestos.
-        esperado = 1.015 * ((-100 + .5 + 10 + 2 + .650 + .2) * 1.04 + 2 + 16) + .020 + .732
+        esperado = 1.015 * ((-100 + .107 + 15.78 + 0 + .650 + .24) * 1.04 + 2.44 + 10) + .020 + .732
         self.assertAlmostEqual(precios.iloc[1]["precio_indexado_eur_mwh"], esperado)
         self.assertLess(esperado, 0)
         desglose = precios[[
@@ -217,7 +217,7 @@ class DesaladoraTests(unittest.TestCase):
             self.assertTrue(metadata["es_simulacion"])
             self.assertIn("contrato.sc_eur_mwh", metadata["hipotesis"])
             self.assertEqual(metadata["dias_optimos"], 1)
-            self.assertIn("Constante ilustrativa", metadata["config_yaml"])
+            self.assertIn("Servicios de ajuste", metadata["config_yaml"])
             plan = pd.read_parquet(salida / "caso" / "programacion_horaria.parquet")
             self.assertEqual(len(plan), 24)
             self.assertIn("precio_indexado_eur_mwh", plan)
