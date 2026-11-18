@@ -1,0 +1,82 @@
+# =============================================================================================
+# industrias/desaladora.yaml · SOLO lo propio de la desaladora (el resto se hereda de base.yaml)
+# Referencia: TFM Universidad de Sevilla (50.000 m3/dia, 66 kV).
+# Simulacion academica: NO representa una planta, contrato ni factura reales.
+# =============================================================================================
+caso:
+  nombre:
+    value: "desaladora_tfm_sevilla"
+    source_type: documented
+  sector:
+    value: "desalacion"
+    source_type: documented
+  etiqueta_resultado:
+    value: "ahorro economico simulado antes de impuestos"
+    source_type: documented
+    nota: "Nunca llamarlo ahorro de factura: faltan contrato y curva real."
+
+planta:
+  volumen_m3_dia:
+    value: 50000
+    source_type: documented
+    fuente: tfm_desaladora
+    nota: "Ficha publica del TFM."
+  consumo_especifico_kwh_m3:
+    value: 3
+    source_type: hypothesis
+    nota: "Referencia sectorial, no medicion de la planta. Consumo = 50.000 x 3 / 1000 = 150 MWh/dia."
+  conexion_kv:
+    value: 66
+    source_type: documented
+    fuente: tfm_desaladora
+  dias_operacion_ano:
+    value: 365
+    source_type: hypothesis
+    nota: "Plena produccion todo el año (sin paradas)."
+
+carga_flexible:
+  candidatas:
+    value: ["bombeo", "depositos intermedios", "procesos auxiliares"]
+    source_type: hypothesis
+    nota: "Descriptivo; no validado en planta."
+
+optimizacion_s1:
+  deposito_agua_mwh_equivalente:
+    value: null
+    source_type: hypothesis
+    nota: "Restriccion propia de desalacion. No modelada: faltan capacidad, niveles y caudales reales del deposito. TODO: lista generica de buffers."
+
+tarifa:
+  acceso:
+    value: "6.2TD"
+    source_type: hypothesis
+    nota: "66 kV encaja en 30-72,5 kV, pero no hay contrato que lo confirme."
+  zona:
+    value: "peninsula"
+    source_type: hypothesis
+  anio_regulatorio:
+    value: 2026
+    source_type: documented
+  segmento_cargos:
+    value: 4
+    source_type: documented
+    nota: "Para 6.2TD es el segmento 4, no el 5."
+
+contrato:
+  modelo:
+    value: "som_energia_referencia_v1"
+    source_type: hypothesis
+    nota: "Contrato de referencia de base.yaml (se heredan sus terminos)."
+
+operacion_demo:
+  potencia_contratada_mw:
+    p1: {value: 12.5, source_type: hypothesis}
+    p2: {value: 12.5, source_type: hypothesis}
+    p3: {value: 12.5, source_type: hypothesis}
+    p4: {value: 12.5, source_type: hypothesis}
+    p5: {value: 12.5, source_type: hypothesis}
+    p6: {value: 12.5, source_type: hypothesis}
+
+fuentes_demo:
+  fecha_consulta: "2026-11-12"
+  tfm_desaladora: "TFM Universidad de Sevilla (referencia del caso)"

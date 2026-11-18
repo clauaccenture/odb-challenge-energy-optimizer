@@ -1,0 +1,102 @@
+# =============================================================================================
+# industrias/siderurgia.yaml · SOLO lo propio de la siderurgia (el resto se hereda de base.yaml)
+# Referencia: MEGASA Siderurgica (Naron, A Coruña).
+# Simulacion academica: NO representa una planta, contrato ni factura reales de MEGASA.
+# Evidencia del PDF del equipo -> source_type: PUBLICO=documented, INFERIDO=derived,
+# ASUMIDO=hypothesis, DESCONOCIDO=null.
+# =============================================================================================
+caso:
+  nombre:
+    value: "siderurgia_megasa_narón"
+    source_type: documented
+    nota: "Identificador del escenario academico; los resultados NO son de MEGASA."
+  sector:
+    value: "siderurgia"
+    source_type: documented
+  cnae:
+    value: "24.10"
+    source_type: documented
+    fuente: prtr
+    nota: "Fabricacion de productos basicos de hierro, acero y ferroaleaciones."
+  ubicacion:
+    value: "Narón, A Coruña"
+    source_type: documented
+    fuente: prtr
+  proceso:
+    value: "acería eléctrica: fundición y colado de chatarra (horno de arco) + laminación"
+    source_type: documented
+    fuente: aai_2026
+  etiqueta_resultado:
+    value: "ahorro economico simulado antes de impuestos"
+    source_type: documented
+    nota: "Potencial teorico, no ahorro de MEGASA ni de factura: faltan contrato y curva real."
+
+planta:
+  consumo_diario_mwh:
+    value: 100
+    source_type: hypothesis
+    nota: "Supuesto del ejercicio (36,5 GWh/año): agregado de cargas gestionables, NO el consumo real de la planta."
+  conexion_kv:
+    value: 132
+    source_type: derived
+    fuente: linea_132kv
+    nota: "L.A.T. 132 kV Mourela-Megasa (DOG 2005 y 2009). Inferencia fuerte, no confirmada: falta la tension del punto de medida."
+  dias_operacion_ano:
+    value: 365
+    source_type: hypothesis
+    nota: "Plena produccion todo el año; sin paradas de mantenimiento conocidas."
+
+carga_flexible:
+  candidatas:
+    value: ["recarga de carretillas y vehiculos", "bombeo y depositos intermedios", "aire comprimido y gases con almacenamiento", "preparacion de chatarra y auxiliares", "parte de procesos programables"]
+    source_type: hypothesis
+    nota: "Descriptivo. No asumir flexibilidad libre del horno de arco (produccion, coladas, seguridad y calidad de red)."
+
+tarifa:
+  acceso:
+    value: "6.3TD"
+    source_type: derived
+    nota: "6.3TD PRESUMIBLE si la medida fiscal se realiza a 132 kV (72,5-145 kV). Falta factura o contrato de acceso."
+  zona:
+    value: "peninsula"
+    source_type: documented
+  anio_regulatorio:
+    value: 2026
+    source_type: documented
+  segmento_cargos:
+    value: 5
+    source_type: hypothesis
+    nota: "Por orden deberia ser 6.3TD, pero la Orden TED/1524/2025 no incluye la tabla de equivalencias: verificar."
+
+contrato:
+  modelo:
+    value: "som_energia_referencia_v1"
+    source_type: hypothesis
+    nota: "Contrato de referencia de base.yaml. Comercializadora real desconocida."
+
+operacion_demo:
+  perfil_no_flexible:
+    value: "uniforme_energia_diaria"
+    source_type: hypothesis
+    nota: "70 MWh/dia no flexibles (2,92 MW continuos), identicos en S0 y S1."
+  potencia_contratada_mw:
+    value: null
+    source_type: hypothesis
+    nota: "DESCONOCIDO: potencias P1-P6 no publicas. S1 concentra hasta 7 MW y podria generar excesos de potencia."
+  flexibilidad_validada_en_planta:
+    value: false
+    source_type: hypothesis
+    nota: "No demuestra viabilidad en horno de arco ni laminacion."
+
+desconocido:
+  value: ["comercializadora", "contrato de acceso y factura", "potencias contratadas P1-P6", "curva horaria real", "energia reactiva y excesos", "tension del punto de medida", "coberturas/PPA y suelo contractual"]
+  source_type: hypothesis
+  nota: "Documentacion humana. Lo operativo se marca con null en cada campo y aparece en las advertencias del loader."
+
+fuentes_demo:
+  fecha_consulta: "2026-11-16"
+  megasa_pdf: "MEGASA_Energy_Optimizer_10.pdf (Grupo 4, caso 4)"
+  linea_132kv: "https://www.xunta.gal/dog/Publicados/2005/20051130/Anuncio27CCE_es.html"
+  linea_132kv_2009: "https://www.xunta.gal/dog/Publicados/2009/20090123/Anuncio361E_es.html"
+  aai_2026: "https://gaia.xunta.gal/sites/default/files/lexislacion/an-24-07-2026-aai-megasa_es.pdf"
+  prtr: "https://prtr-es.miteco.gob.es/informes/fichacomplejo.aspx?Id_Complejo=685"

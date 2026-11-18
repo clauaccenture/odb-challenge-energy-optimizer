@@ -41,6 +41,11 @@ Uso (desde la raiz del repo):
     python notebooks/03_gold_redata.py --no-s3
     python notebooks/03_gold_redata.py --config config/config_desaladora.yaml --no-s3
     python notebooks/03_gold_redata.py --config config/config_desaladora.yaml --s3
+    python notebooks/03_gold_redata.py --industria desaladora --no-s3
+    python notebooks/03_gold_redata.py --industria desaladora --s3
+    El modo --industria lee config/base.yaml + config/industrias/<industria>.yaml
+    (src/config_loader_compuesto.py). Para la desaladora genera exactamente las mismas
+    tablas que --config; metadata.json guarda ademas la config resuelta y las advertencias.
     El modo --config genera un caso Som Energia separado, local o S3, sin cambiar
     las tablas Gold existentes ni el contrato del dashboard. --s3 no usa datos en disco.
 """
@@ -66,6 +71,8 @@ from src.tarifas_6_2td import (  # noqa: E402
     periodo_6_2td,
 )
 from src.config_loader import cargar_config  # noqa: E402
+from src.config_loader_compuesto import cargar_escenario, yaml_resuelto  # noqa: E402
+import src.tarifas_6_2td as tarifas_cargadas  # noqa: E402
 from src.desaladora import asignar_carga, build_desaladora, validar_config  # noqa: E402
  
 load_dotenv()
@@ -253,8 +260,68 @@ def upload_s3(path: Path) -> None:
     print(f"  subido a s3://{BUCKET}/{key}")
  
  
-def ejecutar_desaladora(config_path: Path, usar_s3: bool) -> None:
-    cfg, tipos = cargar_config(config_path)
+def comprobar_tarifa_cargada(cfg: dict) -> None:
+    """El calculo usa src/tarifas_6_2td.py (cargado de config_desaladora.yaml al importar).
+
+    Mientras no exista soporte multi-tarifa, la tarifa de la configuracion debe ser EXACTAMENTE
+    la misma que la del modulo: si no, se paraliza en vez de calcular con peajes equivocados.
+    """
+    acceso = cfg["tarifa"]["acceso"]
+    anio = cfg["tarifa"]["anio_regulatorio"]
+    bloque = cfg["tarifas_reguladas"][acceso]
+    datos = bloque["anios"][anio]
+    calendario = bloque["calendario"]
+    diferencias = [
+        nombre for nombre, de_config, del_modulo in (
+            ("anio", anio, tarifas_cargadas.ANIO_TARIFAS),
+            ("peajes", dict(datos["peajes_energia_eur_mwh"]), tarifas_cargadas.PEAJES_ENERGIA_EUR_MWH),
+            ("cargos", dict(datos["cargos_energia_eur_mwh"]), tarifas_cargadas.CARGOS_ENERGIA_EUR_MWH),
+            ("festivos", frozenset(datos["festivos_nacionales"]),
+             tarifas_cargadas.FESTIVOS_NACIONALES.get(anio)),
+            ("p6_antes_de_hora", calendario["p6_antes_de_hora"], tarifas_cargadas._P6_ANTES_DE_HORA),
+            ("horas_punta", frozenset(calendario["horas_punta"]), tarifas_cargadas._HORAS_PUNTA),
+            ("periodos_por_mes", {int(m): tuple(p) for m, p in calendario["periodos_por_mes"].items()},
+             tarifas_cargadas._PERIODOS_POR_MES),
+        )
+        if de_config != del_modulo
+    ]
+    if diferencias:
+        raise ValueError(
+            f"La tarifa de la configuracion ({acceso} {anio}) no coincide con la que usa "
+            f"src/tarifas_6_2td.py en: {diferencias}. El soporte de otras tarifas (6.3TD) "
+            "aun no esta implementado; no se calcula con peajes equivocados."
+        )
+
+
+def preparar_config(config_path: Path | None, industria: str | None) -> tuple[dict, dict, str, dict]:
+    """(cfg, tipos, texto_yaml, metadata_extra) desde el YAML completo antiguo o desde base + industria."""
+    if industria is None:
+        texto = config_path.read_bytes().decode("utf-8")
+        cfg, tipos = cargar_config(config_path)
+        return cfg, tipos, texto, {"config_origen": str(config_path)}
+    escenario = cargar_escenario(industria)
+    cfg = escenario.valores
+    comprobar_tarifa_cargada(cfg)
+    acceso = cfg["tarifa"]["acceso"]
+    # Solo la tarifa elegida: el catalogo de base.yaml trae tambien las de otras industrias.
+    otras = tuple(f"tarifas_reguladas.{t}." for t in cfg["tarifas_reguladas"] if t != acceso)
+    tipos = {k: v for k, v in escenario.tipos.items()
+             if not k.startswith(otras) and not k.startswith("calendario_tarifario.")}
+    traza = {k: v for k, v in escenario.trazabilidad.items() if k in tipos}
+    extra = {
+        "industria": industria,
+        "config_origen": f"config/base.yaml + config/industrias/{industria}.yaml",
+        "advertencias": list(escenario.advertencias),
+        "apto_para_resultado_real": escenario.apto_para_resultado_real,
+        "trazabilidad": json.loads(json.dumps(traza, ensure_ascii=False, default=str)),
+    }
+    cfg_tarifa = {**cfg, "tarifas_reguladas": {acceso: cfg["tarifas_reguladas"][acceso]}}
+    cfg_tarifa.pop("calendario_tarifario", None)
+    return cfg_tarifa, tipos, yaml_resuelto(escenario), extra
+
+
+def ejecutar_desaladora(cfg: dict, tipos: dict, config_texto: str, metadata_extra: dict,
+                        usar_s3: bool) -> None:
     validar_config(cfg)
     cliente = None
     silver_version = None
@@ -296,8 +363,8 @@ def ejecutar_desaladora(config_path: Path, usar_s3: bool) -> None:
         "formulacion": "optimo del modelo agregado; flexibilidad no validada en planta",
         "criterio_optimizacion": "precio_indexado_eur_mwh",
         "resolucion": cfg["contrato"]["resolucion"],
-        "config_yaml": config_path.read_bytes().decode("utf-8"),
-        "config_sha256": hashlib.sha256(config_path.read_bytes()).hexdigest(),
+        "config_yaml": config_texto,
+        "config_sha256": hashlib.sha256(config_texto.encode("utf-8")).hexdigest(),
         "silver_sha256": hashlib.sha256(silver_bytes).hexdigest(),
         "silver_origen": origen,
         "silver_version_id": silver_version,
@@ -308,6 +375,7 @@ def ejecutar_desaladora(config_path: Path, usar_s3: bool) -> None:
         },
         "source_types": tipos,
         "hipotesis": sorted(k for k, v in tipos.items() if v == "hypothesis"),
+        **metadata_extra,
         "dias_esperados": len(resumen),
         "dias_optimos": int(resumen["estado_optimizacion"].eq("optimo").sum()),
         "fecha_primera_programacion": str(plan["fecha_local"].min()),
@@ -353,14 +421,17 @@ def main() -> None:
     modo = ap.add_mutually_exclusive_group()
     modo.add_argument("--no-s3", action="store_true", help="solo local")
     modo.add_argument("--s3", action="store_true", help="caso desaladora: entrada y salida S3, sin datos en disco")
-    ap.add_argument("--config", type=Path, help="caso desaladora Som Energia; elegir --s3 o --no-s3")
+    caso = ap.add_mutually_exclusive_group()
+    caso.add_argument("--config", type=Path, help="caso desaladora Som Energia (YAML completo); elegir --s3 o --no-s3")
+    caso.add_argument("--industria", help="caso desde config/base.yaml + config/industrias/<industria>.yaml; elegir --s3 o --no-s3")
     args = ap.parse_args()
-    if args.s3 and not args.config:
-        ap.error("--s3 requiere --config; el Gold anterior conserva su flujo habitual.")
-    if args.config and not (args.s3 or args.no_s3):
+    con_caso = args.config is not None or args.industria is not None
+    if args.s3 and not con_caso:
+        ap.error("--s3 requiere --config o --industria; el Gold anterior conserva su flujo habitual.")
+    if con_caso and not (args.s3 or args.no_s3):
         ap.error("Elige explicitamente --s3 (EC2, sin datos en disco) o --no-s3 (local).")
-    if args.config:
-        ejecutar_desaladora(args.config, args.s3)
+    if con_caso:
+        ejecutar_desaladora(*preparar_config(args.config, args.industria), args.s3)
         return
     if not SILVER.exists():
         raise FileNotFoundError(f"No existe {SILVER}. Ejecuta antes 02_calidad_redata.py")
