@@ -25,7 +25,7 @@ def load_esios_config(path: Path, model_path: Path | None = None) -> dict[str, A
         raise ValueError("La seccion esios debe incluir ingestion.")
     if not isinstance(esios.get("indicator_ids"), list) or not esios["indicator_ids"]:
         raise ValueError("La seccion esios debe incluir indicator_ids.")
-    model_path = model_path or path.parent / "modelo.yml"
+    model_path = model_path or path.parent / "modelo.yaml"
     window = _read_yaml(model_path)
     model = window.get("model")
     if not isinstance(model, dict):

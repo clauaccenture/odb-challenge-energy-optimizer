@@ -65,10 +65,12 @@ comparison["abs_difference"] = (
 | Días con diferencia absoluta <= 1 EUR/MWh | 91,28 % |
 | Días con diferencia absoluta <= 2 EUR/MWh | 98,36 % |
 
-La diferencia media con signo es prácticamente cero, por lo que no se observa un sesgo sistemático de una fuente frente a la otra. La diferencia absoluta media es moderada respecto al precio medio y el 91,28 % de las observaciones difiere en menos de 1 EUR/MWh. Las coincidencias exactas son pocas porque las fuentes no son copias byte a byte y pueden aplicar criterios de publicación o redondeo distintos.
+Se observa que:
+- La diferencia media con signo es prácticamente cero. 
+- La diferencia absoluta media es moderada respecto al precio medio y el 91,28 % de las observaciones difiere en menos de 1 EUR/MWh. 
 
 La comparación usando `fecha_entrega` como clave produce un resultado aún menos coincidente: 6 coincidencias exactas, 1,64 % dentro de 0,01 EUR/MWh, una diferencia absoluta media de 0,762681 EUR/MWh y una máxima de 13,06 EUR/MWh.
 
 ## Decisión
 
-Se mantuvo MIBGAS como única fuente operativa D+1 porque cubre todo el periodo del modelo hasta el 30/09/2026, mientras que CNMC solo llega hasta el 31/05/2026. Además, MIBGAS es la fuente oficial directa del producto utilizado y mantener ambas ingestas añadiría complejidad sin una necesidad operativa concreta. Aunque los precios son próximos, no son idénticos; por ello, la retirada de CNMC responde a cobertura y simplicidad operativa, no a una igualdad exacta entre las series. Los componentes CNMC se eliminaron tras conservar esta comparación como registro de la decisión.
+Se mantuvo MIBGAS como única fuente operativa D+1 porque cubre todo el periodo del modelo hasta el 30/09/2026, mientras que CNMC solo llega hasta el 31/05/2026. Además, MIBGAS es la fuente oficial directa del producto utilizado y mantener ambas ingestas añadiría complejidad sin una necesidad operativa concreta. 

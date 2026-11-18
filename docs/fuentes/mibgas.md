@@ -12,7 +12,7 @@ La ingesta utiliza los CSV anuales oficiales del portal de MIBGAS:
 https://www.mibgas.es/es/file-access/MIBGAS_Data_{year}.csv?path=AGNO_{year}/XLS
 ```
 
-La configuración está en `config/mibgas.yml`. El filtro de negocio utilizado es:
+La configuración está en `config/mibgas.yaml`. El filtro de negocio utilizado es:
 
 - Producto: `GDAES_D+1`.
 - Lugar de entrega: `PVB`.

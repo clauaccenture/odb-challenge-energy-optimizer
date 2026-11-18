@@ -9,13 +9,13 @@ class MibgasConfigTests(unittest.TestCase):
     def test_loads_source_and_common_model_config(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            (root / "mibgas.yml").write_text(
+            (root / "mibgas.yaml").write_text(
                 "mibgas:\n"
                 "  ingestion: {}\n"
                 "  product: {code: GDAES_D+1}\n",
                 encoding="utf-8",
             )
-            (root / "modelo.yml").write_text(
+            (root / "modelo.yaml").write_text(
                 "model:\n"
                 "  history_start: 2024-10-01\n"
                 "  history_end: 2026-09-30\n"
@@ -25,7 +25,7 @@ class MibgasConfigTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            config = load_mibgas_config(root / "mibgas.yml")
+            config = load_mibgas_config(root / "mibgas.yaml")
 
             self.assertEqual(str(config["mibgas"]["model"]["history_start"]), "2024-10-01")
             self.assertEqual(config["mibgas"]["product"]["code"], "GDAES_D+1")

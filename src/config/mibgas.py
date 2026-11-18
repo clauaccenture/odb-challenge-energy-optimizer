@@ -18,7 +18,7 @@ def load_mibgas_config(path: Path, window_path: Path | None = None) -> dict[str,
         raise ValueError("La configuracion MIBGAS debe incluir ingestion.")
     if not isinstance(mibgas.get("product"), dict):
         raise ValueError("La configuracion MIBGAS debe incluir product.")
-    window_path = window_path or path.parent / "modelo.yml"
+    window_path = window_path or path.parent / "modelo.yaml"
     if not window_path.is_file():
         raise FileNotFoundError(f"No existe la ventana comun: {window_path}")
     with window_path.open(encoding="utf-8") as window_file:

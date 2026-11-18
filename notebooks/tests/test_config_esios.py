@@ -19,7 +19,7 @@ class ModelConfigTests(unittest.TestCase):
         )
 
         with TemporaryDirectory() as directory:
-            model_path = Path(directory) / "modelo.yml"
+            model_path = Path(directory) / "modelo.yaml"
             model_path.write_text(
                 "model:\n"
                 "  history_start: 2024-10-01\n"
@@ -31,7 +31,7 @@ class ModelConfigTests(unittest.TestCase):
             )
             for content in invalid_configs:
                 with self.subTest(content=content):
-                    path = Path(directory) / "esios.yml"
+                    path = Path(directory) / "esios.yaml"
                     path.write_text(content, encoding="utf-8")
                     with self.assertRaises(ValueError):
                         load_esios_config(path, model_path)
@@ -40,7 +40,7 @@ class ModelConfigTests(unittest.TestCase):
         """Comprueba que la configuración ESIOS versionada se puede cargar."""
         project_root = Path(__file__).resolve().parents[2]
 
-        config = load_esios_config(project_root / "config" / "esios.yml")
+        config = load_esios_config(project_root / "config" / "esios.yaml")
 
         self.assertIn("esios", config)
         self.assertEqual(config["esios"]["timezone"], "Europe/Madrid")

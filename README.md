@@ -370,7 +370,7 @@ Para ejecutar el proyecto con **otro periodo**, basta con cambiar las fechas `--
 
 ### 8.7. Flujo de datos y configuración del modelo
 
-La configuración común de la ventana está en `config/modelo.yml`. Los parámetros específicos de ESIOS y MIBGAS están separados en `config/esios.yml` y `config/mibgas.yml`. Los loaders viven en `src/config/`; los módulos de ingesta y calidad específicos están en `src/ingesta/` y `src/calidad/`.
+La configuración común de la ventana está en `config/modelo.yaml`. Los parámetros específicos de ESIOS y MIBGAS están separados en `config/esios.yaml` y `config/mibgas.yaml`. Los loaders viven en `src/config/`; los módulos de ingesta y calidad específicos están en `src/ingesta/` y `src/calidad/`.
 
 MIBGAS conserva los CSV anuales en `data/raw/mibgas/` y genera `data/processed/mibgas/mibgas_d1.json`, con cobertura validada del 01/10/2024 al 30/09/2026.
 
