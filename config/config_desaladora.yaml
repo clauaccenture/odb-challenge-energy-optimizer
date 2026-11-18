@@ -210,9 +210,9 @@ contrato:
     source_type: documented
     nota: "Factor de la formula publica; no es IVA ni IEE."
   pc_eur_mwh:
-    value: 0.5
-    source_type: hypothesis
-    nota: "Constante ilustrativa, no valor regulado verificado."
+    value: {P1: 0.465, P2: 0.213, P3: 0.142, P4: 0.107, P5: 0.107, P6: 0.0}
+    source_type: derived
+    nota: "BOE-A-2025-26705, apartado tercero, segmento 4; EUR/MWh (publicado en EUR/kWh). P6 aparece sin importe: 0 provisional por interpretacion de celda en blanco, confirmar criterio de aplicacion."
   sc_eur_mwh:
     value: 10.0
     source_type: hypothesis
@@ -220,23 +220,35 @@ contrato:
   dsv_eur_mwh:
     value: 2.0
     source_type: hypothesis
-    nota: "Coste absoluto supuesto. NO es el 14 % publicado ni se aplica como porcentaje del spot."
+    nota: "PROVISIONAL de la demo; para calculo real sustituir por 0.14 * (0.5*(CoDsvSu+CoDsvBa)+BS3+RAD3), con series REE. NO equivale al 14 % del spot."
+  factor_desvio_som_por_trimestre:
+    value: {t1: 0.14, t2: 0.14, t3: 0.14, t4: 0.14}
+    source_type: documented
+    nota: "Som Energia, historico tarifa indexada 2026; solo metadato hasta integrar las series REE."
   posom_eur_mwh:
-    value: 0.2
-    source_type: hypothesis
-    nota: "Constante ilustrativa conjunta de operadores; no liquidacion oficial."
+    value: 0.24402
+    source_type: derived
+    nota: "Referencia regulatoria 2026: 0.20332 REE (BOE-A-2025-27211) + 0.04070 OMIE (BOE-A-2025-26705). Aplicacion por MWh de programa: aproximada sobre consumo medido, sin cuota fija."
+  coste_omie_2026_eur_mwh:
+    value: 0.04070
+    source_type: documented
+    nota: "BOE-A-2025-26705, apartado octavo, importe comercializadores/consumidores directos por MWh del programa final."
+  coste_ree_os_2026_eur_mwh:
+    value: 0.20332
+    source_type: documented
+    nota: "BOE-A-2025-27211, cuota variable OS 2026: fuente auxiliar; no sustituye POsOm conjunto."
   perdidas_fraccion:
     value: 0.04
     source_type: hypothesis
-    nota: "4 % ilustrativo; sustituir por coeficientes REE de 6.2TD para una replica contractual."
+    nota: "PROVISIONAL: coeficientes 6.2TD P1-P6 disponibles arriba; falta factor corrector horario de REE. No usar tabla base sin validar metodo."
   fe_eur_mwh:
     value: 2.0
     source_type: hypothesis
-    nota: "Aportacion ilustrativa; no obligacion individual confirmada de la comercializadora."
+    nota: "PROVISIONAL: orden TED/133/2026 fija RFE=2.4374639 EUR/MWh para PVPC, NO prueba valor FE especifico de Som Energia."
   f_eur_mwh:
     value: 16.0
     source_type: hypothesis
-    nota: "Referencia publica 6.1TD de 0,016 EUR/kWh; extrapolada a 6.2TD, no oferta confirmada."
+    nota: "Referencia publica 6.1TD 0.016 EUR/kWh, tambien publicada 3.0TD; aplicacion contractual 6.2TD no confirmada. No es valor garantizado para la desaladora."
   gdo_eur_mwh_por_trimestre:
     t1:
       value: 0.650
@@ -249,7 +261,8 @@ contrato:
       source_type: documented
     t4:
       value: 1.690
-      source_type: documented
+      source_type: hypothesis
+      nota: "Valor 1.690 recogido de la revision interna, pero no confirmado en la version publica del historico consultada hoy; verificar antes de presentar como documentado."
   criterio_gdo:
     value: "historico_sin_impuestos"
     source_type: hypothesis
@@ -273,10 +286,20 @@ operacion_demo:
     nota: "Carga agregada idealizada; no demuestra viabilidad de bombas, membranas ni deposito."
 
 fuentes_demo:
-  fecha_consulta: "2026-11-12"
+  fecha_consulta: "2026-11-17"
+  guia_tarifa_indexada: "EiE_Guia_funcionamiento_tarifa_ indexada_SomEnergia.pdf (aportada por el equipo; paginas 5-9)"
   formula: "https://www.somenergia.coop/es/servicios/como-calculamos-el-precio"
-  historico_gdo: "https://www.somenergia.coop/es/historico-tarifa-indexada"
+  repositorio_publico_som: "https://github.com/Som-Energia/giscedata_facturacio_indexada_som"
+  codigo_calculo_som: "https://github.com/Som-Energia/giscedata_facturacio_indexada_som/blob/master/tarifes.py"
+  historico_gdo_y_factor_dsv: "https://www.somenergia.coop/es/historico-tarifa-indexada"
   referencia_f_6_1td: "https://www.somenergia.coop/es/tarifas-luz/altatension-indexada"
   condiciones_6_2td: "https://es.support.somenergia.coop/article/1343-tarifas-de-alta-tension-6-1td-6-2td-6-3td-y-6-4td-indexadas"
+  pagos_capacidad_2026: "https://www.boe.es/buscar/doc.php?id=BOE-A-2025-26705"
+  operador_sistema_2026: "https://www.boe.es/diario_boe/txt.php?id=BOE-A-2025-27211"
+  operadores_2026: "REE 0.20332 + OMIE 0.04070 EUR/MWh: ver guia MD para base de repercusion"
+  redata_precio_referencia: "https://www.omie.es/es/spot-hoy"
+  esios_ree: "https://www.esios.ree.es/"
+  operador_mercado_2026: "https://www.boe.es/buscar/doc.php?id=BOE-A-2025-26705"
+  fnee_2026: "https://boe.es/buscar/doc.php?id=BOE-A-2026-4522"
   peajes: "https://www.boe.es/buscar/doc.php?id=BOE-A-2025-26348"
   cargos: "https://www.boe.es/buscar/doc.php?id=BOE-A-2025-26705"

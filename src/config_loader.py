@@ -40,7 +40,11 @@ def cargar_config(path: str | Path) -> tuple[dict, dict]:
 
 def derivados(cfg: dict) -> dict:
     """Valores calculados (source_type = derived) y comprobaciones de coherencia."""
-    consumo = cfg["planta"]["volumen_m3_dia"] * cfg["planta"]["consumo_especifico_kwh_m3"] / 1000  # MWh/dia
+    planta = cfg["planta"]
+    if planta.get("consumo_diario_mwh") is not None:  # industrias sin volumen (p. ej. siderurgia): dato directo
+        consumo = planta["consumo_diario_mwh"]
+    else:  # desaladora: volumen x consumo especifico
+        consumo = planta["volumen_m3_dia"] * planta["consumo_especifico_kwh_m3"] / 1000  # MWh/dia
     carga = cfg["carga_flexible"]["energia_diaria_mwh"]
     limite = cfg["carga_flexible"]["limite_mwh_hora"]
     base = cfg["baseline_s0"]
@@ -54,7 +58,7 @@ def derivados(cfg: dict) -> dict:
                   if restr[k] is not None]
     return {
         "consumo_estimado_mwh_dia": consumo,                 # 150
-        "consumo_estimado_gwh_ano": consumo * cfg["planta"]["dias_operacion_ano"] / 1000,  # 54,75
+        "consumo_estimado_gwh_ano": consumo * planta["dias_operacion_ano"] / 1000,  # 54,75
         "fraccion_flexible": carga / consumo,                # 0,20
         "horas_minimas_s1": int(horas_min),                  # 5
         "requiere_programacion_lineal": bool(operativas),
