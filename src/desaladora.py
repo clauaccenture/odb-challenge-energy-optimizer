@@ -111,7 +111,7 @@ def validar_config(cfg: dict) -> None:
     pc = contrato["pc_eur_mwh"]
     if isinstance(pc, dict):
         if set(pc) != set(PERIODOS):
-            raise ValueError("contrato.pc_eur_mwh: por periodo debe definir exactamente P1-P6.")
+            raise ValueError("Pc debe indicar exactamente los periodos P1-P6.")
         for periodo, valor in pc.items():
             _numero(valor, f"contrato.pc_eur_mwh.{periodo}")
     else:

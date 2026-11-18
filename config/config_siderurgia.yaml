@@ -1,0 +1,311 @@
+# BOCETO v0 · Caso "siderurgia" (referencia: MEGASA Siderurgica, Naron, A Coruña) · Open Data Business Challenge, caso 4.
+# Misma estructura que config_desaladora.yaml. Seleccion: set ENERGY_CONFIG=config\config_siderurgia.yaml
+# Simulación académica: NO representa una planta, contrato ni factura reales de MEGASA.
+# Equivalencia de evidencia del PDF del equipo -> source_type:
+#   PUBLICO = documented · INFERIDO = derived · ASUMIDO = hypothesis · DESCONOCIDO = null (no modelado)
+version_config: 2
+
+caso:
+  nombre:
+    value: "siderurgia_megasa_narón"
+    source_type: documented
+  sector:
+    value: "siderurgia"
+    source_type: documented
+  cnae:
+    value: "24.10"
+    source_type: documented
+    nota: "Fabricacion de productos basicos de hierro, acero y ferroaleaciones (PRTR 784, instalacion DEI/IPPC)"
+  ubicacion:
+    value: "Narón, A Coruña"
+    source_type: documented
+  proceso:
+    value: "acería eléctrica: fundición y colado de chatarra (horno de arco) + laminación"
+    source_type: documented
+  etiqueta_resultado:
+    value: "ahorro economico simulado antes de impuestos"
+    source_type: documented
+    nota: "Potencial teorico, no ahorro de MEGASA ni de factura: faltan contrato y curva real."
+
+planta:
+  consumo_diario_mwh:
+    value: 100
+    source_type: hypothesis
+    nota: "Supuesto del ejercicio (36,5 GWh/año): se trata como una linea/agregado de cargas gestionables, NO como el consumo real de la planta. Aqui no hay volumen x consumo especifico"
+  conexion_kv:
+    value: 132
+    source_type: derived
+    nota: "L.A.T. 132 kV Mourela-Megasa documentada por la Xunta (DOG 2005 IN407A 05/458; DOG 2009 IN407A 08/278). Inferencia fuerte, no confirmada: falta la tension del punto de medida"
+  dias_operacion_ano:
+    value: 365
+    source_type: hypothesis
+
+carga_flexible:
+  energia_diaria_mwh:
+    value: 30
+    source_type: hypothesis
+    nota: "Parametro del reto (30 % de 100 MWh/dia), no dato de empresa"
+  limite_mwh_hora:
+    value: 7
+    source_type: hypothesis
+    nota: "7 MW de potencia flexible media en una hora; parametro del reto"
+  candidatas:
+    value: ["recarga de carretillas y vehiculos", "bombeo y depositos intermedios", "aire comprimido y gases con almacenamiento", "preparacion de chatarra y auxiliares", "parte de procesos programables"]
+    source_type: hypothesis
+    nota: "Descriptivo. No asumir flexibilidad libre del horno de arco (produccion, coladas, seguridad y calidad de red)"
+
+baseline_s0:
+  mwh_hora:
+    value: 2.5
+    source_type: hypothesis
+    nota: "Baseline operacional sintetico comun del reto; no es el horario real de MEGASA"
+  hora_inicio:
+    value: 8
+    source_type: hypothesis
+  hora_fin:
+    value: 20
+    source_type: hypothesis
+    nota: "Hasta las 20:00 sin incluir la hora que empieza a las 20:00"
+
+optimizacion_s1:
+  franja_preferente_inicio:
+    value: 8
+    source_type: hypothesis
+    nota: "Regla de desempate del equipo"
+  franja_preferente_fin:
+    value: 17
+    source_type: hypothesis
+  # Restricciones de proceso (ventanas, rampas, minimos, precedencias): DESCONOCIDAS, null = no se modela.
+  # En siderurgia son las primeras candidatas: si alguna deja de ser null hay que pasar a programacion lineal.
+  rampa_max_mwh_hora:
+    value: null
+    source_type: hypothesis
+  min_horas_encendido:
+    value: null
+    source_type: hypothesis
+  coste_arranque_eur:
+    value: null
+    source_type: hypothesis
+  deposito_agua_mwh_equivalente:
+    value: null
+    source_type: hypothesis
+    nota: "Pensado para la desaladora; no aplica a siderurgia"
+
+mercado:
+  fuente:
+    value: "REData"
+    source_type: documented
+  serie:
+    value: "Precio mercado spot"
+    source_type: documented
+  zona_horaria:
+    value: "Europe/Madrid"
+    source_type: documented
+  politica_negativos:
+    value: "sin_truncar"
+    source_type: documented
+    nota: "El spot negativo permanece negativo (no clip, no max(precio,0))"
+  fecha_inicio:
+    value: null
+    source_type: hypothesis
+    nota: "null = primera fecha Silver disponible dentro de la vigencia de la tarifa."
+  fecha_fin:
+    value: null
+    source_type: hypothesis
+    nota: "null = ultima fecha Silver disponible con tarifa."
+
+tarifa:
+  acceso:
+    value: "6.3TD"
+    source_type: derived
+    nota: "6.3TD PRESUMIBLE si la medida fiscal se realiza a 132 kV (72,5-145 kV). No usar '6.3TD confirmada': falta factura o contrato de acceso"
+  zona:
+    value: "peninsula"
+    source_type: documented
+  anio_regulatorio:
+    value: 2026
+    source_type: documented
+  segmento_cargos:
+    value: 5
+    source_type: hypothesis
+    nota: "Por orden (4 = 6.2TD, 6 = valores menores) deberia ser 6.3TD, pero la Orden TED/1524/2025 no incluye la tabla de equivalencias: verificar"
+
+# Componentes del precio indexado de la demo; peajes y cargos se incluyen una sola vez.
+componentes:
+  spot:
+    value: true
+    source_type: documented
+  peaje_energia:
+    value: true
+    source_type: documented
+  cargo_energia:
+    value: true
+    source_type: documented
+  perdidas:
+    value: true
+    source_type: hypothesis
+    nota: "Coeficiente constante de demo, no serie regulada de REE."
+  iee:
+    value: false
+    source_type: hypothesis
+  iva:
+    value: false
+    source_type: hypothesis
+  potencia_y_excesos:
+    value: false
+    source_type: hypothesis
+    nota: "Fuera de alcance"
+
+# Datos regulados por tarifa y año. Fuente unica: src/tarifas_6_2td.py solo los lee de aqui.
+tarifas_reguladas:
+  6.3TD:
+    calendario:
+      p6_antes_de_hora:
+        value: 8
+        source_type: documented
+        nota: "Circular 3/2020 CNMC, art. 7.2 (BOE-A-2020-1066): horas locales 0-7 siempre P6"
+      horas_punta:
+        value: [9, 10, 11, 12, 13, 18, 19, 20, 21]
+        source_type: documented
+        nota: "Horas locales de punta; el resto de horas (8, 14-17, 22-23) son llano"
+      periodos_por_mes:
+        value:
+          1: [P1, P2]
+          2: [P1, P2]
+          3: [P2, P3]
+          4: [P4, P5]
+          5: [P4, P5]
+          6: [P3, P4]
+          7: [P1, P2]
+          8: [P3, P4]
+          9: [P3, P4]
+          10: [P4, P5]
+          11: [P2, P3]
+          12: [P1, P2]
+        source_type: documented
+        nota: "Temporada peninsular por mes -> [periodo en horas punta, periodo en horas llano]"
+    perdidas_reguladas_fraccion:
+      value: null
+      source_type: hypothesis
+      nota: "DESCONOCIDO para 6.3TD: las perdidas reguladas dependen del nivel de tension (el bloque 6.2TD NO sirve). Buscar los coeficientes en la Circular 3/2020 CNMC"
+    anios:
+      2026:
+        peajes_energia_eur_mwh:
+          value: {P1: 11.279, P2: 5.324, P3: 1.994, P4: 0.995, P5: 0.048, P6: 0.014}
+          source_type: documented
+          nota: "EUR/MWh (el BOE publica EUR/kWh). Resolucion CNMC 18/12/2025, anexo I apartado 1.b, fila 6.3 TD (BOE-A-2025-26348)"
+        cargos_energia_eur_mwh:
+          value: {P1: 7.496, P2: 5.552, P3: 2.998, P4: 1.499, P5: 0.961, P6: 0.600}
+          source_type: hypothesis
+          nota: "EUR/MWh. Orden TED/1524/2025 (BOE-A-2025-26705), fila del segmento 5. Hipotesis hasta confirmar que segmento 5 = 6.3TD"
+        festivos_nacionales:
+          value: [2026-01-01, 2026-01-06, 2026-05-01, 2026-08-15, 2026-10-12, 2026-11-01, 2026-12-06, 2026-12-08, 2026-12-25]
+          source_type: documented
+          nota: "Fecha fija y no sustituibles, mas el 6 de enero. Sabados, domingos y festivos: todo el dia P6"
+
+# Los importes estimados NO son una oferta de Som Energia ni estimaciones calibradas.
+# Todos los componentes monetarios se expresan en EUR/MWh, antes de impuestos.
+contrato:
+  modelo:
+    value: "som_energia_referencia_v1"
+    source_type: hypothesis
+    nota: "Formula publica; contrato ficticio, sin oferta individualizada 6.2TD."
+  resolucion:
+    value: "horaria_media_cuartohoraria"
+    source_type: hypothesis
+    nota: "Precio REData = media de cuatro cuartos; potencia constante dentro de cada hora."
+  liquidacion_negativos:
+    value: "sin_suelo_simulado"
+    source_type: hypothesis
+    nota: "Se conserva PH aunque sea negativo; NO confirma liquidacion contractual Som Energia."
+  factor_formula:
+    value: 1.015
+    source_type: documented
+    nota: "Factor de la formula publica; no es IVA ni IEE."
+  pc_eur_mwh:
+    value: {P1: 0.465, P2: 0.213, P3: 0.142, P4: 0.107, P5: 0.107, P6: 0.0}
+    source_type: derived
+    nota: "BOE-A-2025-26705, apartado tercero, segmento 4; EUR/MWh (publicado en EUR/kWh). P6 aparece sin importe: 0 provisional por interpretacion de celda en blanco, confirmar criterio de aplicacion."
+  sc_eur_mwh:
+    value: 10.0
+    source_type: hypothesis
+    nota: "Aproximacion constante de costes de red; no reproduce servicios de ajuste reales."
+  dsv_eur_mwh:
+    value: 2.0
+    source_type: hypothesis
+    nota: "PROVISIONAL de la demo; para calculo real sustituir por 0.14 * (0.5*(CoDsvSu+CoDsvBa)+BS3+RAD3), con series REE. NO equivale al 14 % del spot."
+  factor_desvio_som_por_trimestre:
+    value: {t1: 0.14, t2: 0.14, t3: 0.14, t4: 0.14}
+    source_type: documented
+    nota: "Som Energia, historico tarifa indexada 2026; solo metadato hasta integrar las series REE."
+  posom_eur_mwh:
+    value: 0.24402
+    source_type: derived
+    nota: "Referencia regulatoria 2026: 0.20332 REE (BOE-A-2025-27211) + 0.04070 OMIE (BOE-A-2025-26705). Aplicacion por MWh de programa: aproximada sobre consumo medido, sin cuota fija."
+  coste_omie_2026_eur_mwh:
+    value: 0.04070
+    source_type: documented
+    nota: "BOE-A-2025-26705, apartado octavo, importe comercializadores/consumidores directos por MWh del programa final."
+  coste_ree_os_2026_eur_mwh:
+    value: 0.20332
+    source_type: documented
+    nota: "BOE-A-2025-27211, cuota variable OS 2026: fuente auxiliar; no sustituye POsOm conjunto."
+  perdidas_fraccion:
+    value: 0.04
+    source_type: hypothesis
+    nota: "PROVISIONAL: coeficientes 6.2TD P1-P6 disponibles arriba; falta factor corrector horario de REE. No usar tabla base sin validar metodo."
+  fe_eur_mwh:
+    value: 2.0
+    source_type: hypothesis
+    nota: "PROVISIONAL: orden TED/133/2026 fija RFE=2.4374639 EUR/MWh para PVPC, NO prueba valor FE especifico de Som Energia."
+  f_eur_mwh:
+    value: 16.0
+    source_type: hypothesis
+    nota: "Referencia publica 6.1TD 0.016 EUR/kWh, tambien publicada 3.0TD; aplicacion contractual 6.2TD no confirmada. No es valor garantizado para la desaladora."
+  gdo_eur_mwh_por_trimestre:
+    t1:
+      value: 0.650
+      source_type: documented
+    t2:
+      value: 0.965
+      source_type: documented
+    t3:
+      value: 1.405
+      source_type: documented
+    t4:
+      value: 1.690
+      source_type: hypothesis
+      nota: "Valor 1.690 recogido de la revision interna, pero no confirmado en la version publica del historico consultada hoy; verificar antes de presentar como documentado."
+  criterio_gdo:
+    value: "historico_sin_impuestos"
+    source_type: hypothesis
+    nota: "Se adopta la tabla titulada sin impuestos; hay ambiguedad fiscal en otras paginas."
+
+operacion_demo:
+  perfil_no_flexible:
+    value: "uniforme_energia_diaria"
+    source_type: hypothesis
+    nota: "70 MWh/dia no flexibles (2,92 MW continuos), identicos en S0 y S1, repartidos entre las 23/24/25 horas reales."
+  potencia_contratada_mw:
+    value: null
+    source_type: hypothesis
+    nota: "DESCONOCIDO: potencias P1-P6 no publicas. S1 concentra hasta 7 MW y podria generar excesos de potencia"
+  flexibilidad_validada_en_planta:
+    value: false
+    source_type: hypothesis
+    nota: "Carga agregada idealizada; no demuestra viabilidad en horno de arco ni laminacion."
+
+desconocido:
+  value: ["comercializadora", "contrato de acceso y factura", "potencias contratadas P1-P6", "curva horaria real", "energia reactiva y excesos", "tension del punto de medida", "coberturas/PPA y suelo contractual"]
+  source_type: hypothesis
+  nota: "Lo que habria que validar antes de una recomendacion real. Comunicar como potencial, no como ahorro de MEGASA."
+
+fuentes_demo:
+  fecha_consulta: "2026-11-16"
+  megasa_pdf: "MEGASA_Energy_Optimizer_10.pdf (Grupo 4, caso 4)"
+  linea_132kv: "https://www.xunta.gal/dog/Publicados/2005/20051130/Anuncio27CCE_es.html"
+  linea_132kv_2009: "https://www.xunta.gal/dog/Publicados/2009/20090123/Anuncio361E_es.html"
+  aai_2026: "https://gaia.xunta.gal/sites/default/files/lexislacion/an-24-07-2026-aai-megasa_es.pdf"
+  prtr: "https://prtr-es.miteco.gob.es/informes/fichacomplejo.aspx?Id_Complejo=685"
+  peajes: "https://www.boe.es/buscar/doc.php?id=BOE-A-2025-26348"
+  cargos: "https://www.boe.es/buscar/doc.php?id=BOE-A-2025-26705"
