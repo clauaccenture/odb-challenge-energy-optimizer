@@ -2,7 +2,7 @@
 
 ## Papel en el proyecto
 
-CNMC se utiliza como fuente alternativa y de contraste para los precios/productos MIBGAS. No es la fuente principal para construir la serie histórica completa del modelo.
+CNMC queda retirada del pipeline operativo. Se conserva únicamente como histórico de auditoría, porque publica el mismo ámbito de mercado y producto D+1 que MIBGAS, pero con precios no idénticos y cobertura incompleta de la ventana del modelo.
 
 ## Acceso
 
@@ -43,7 +43,11 @@ Por tanto:
 
 ## Decisión del proyecto
 
-MIBGAS es la fuente principal para la serie D+1 completa. CNMC queda como fuente secundaria para comparación, control de coherencia y detección de discrepancias durante el periodo solapado.
+Se decidió retirar CNMC de la construcción de la serie productiva. MIBGAS es la única fuente operativa para D+1 porque cubre la ventana completa y evita mantener dos ingestas con distinta cobertura y discrepancias de precio sin un uso productivo definido.
+
+Los raw, processed, configuración, notebooks y tests de CNMC se mantienen como registro histórico reproducible de la decisión y del periodo solapado. No deben incorporarse nuevos datos CNMC ni mezclarse sus resultados con la serie productiva salvo que se reabra explícitamente esta decisión.
+
+La comparación reproducible y sus resultados están documentados en [`docs/fuentes/comparacion_cnmc_mibgas.md`](comparacion_cnmc_mibgas.md).
 
 ## Ejecución
 
