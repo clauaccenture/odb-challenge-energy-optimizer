@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import threading
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -16,6 +17,16 @@ from src.ingesta.base import (
     save_json,
     validate_http_settings,
 )
+
+_thread_local = threading.local()
+
+
+def _session_get(url: str, **kwargs: Any) -> requests.Response:
+    session = getattr(_thread_local, "session", None)
+    if session is None:
+        session = requests.Session()
+        _thread_local.session = session
+    return session.get(url, **kwargs)
 
 
 
@@ -48,7 +59,7 @@ def get_json(
     params: dict[str, Any] | None = None,
     retries: int = 4,
     timeout: int = 90,
-    request_get: RequestGet = requests.get,
+    request_get: RequestGet = _session_get,
     sleep: Sleep = time.sleep,
 ) -> dict[str, Any]:
     return request_json(
