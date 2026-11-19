@@ -122,7 +122,17 @@ def formula_legend(cfg: dict, year: int) -> pd.DataFrame:
             if isinstance(value, dict):
                 label = " / ".join(f"{period}: {amount:g}" for period, amount in value.items()).replace(".", ",")
             else:
-                label = (f"{value:g} ({value * 100:g} %)" if symbol == "Perd" else f"{value:g}").replace(".", ",")
+                value = contract[key]["value"]
+
+                if isinstance(value, dict):
+                    label = " / ".join(
+                        f"{period}: {amount:g}".replace(".", ",")
+                        for period, amount in value.items()
+                    )
+                elif symbol == "Perd":
+                    label = f"{value:g} ({value * 100:g} %)".replace(".", ",")
+                else:
+                    label = f"{value:g}".replace(".", ",")
         rows.append((symbol, meaning, label, origin))
     rows.extend([
         ("PTD", "Peaje de transporte y distribución", f"P1–P6 · {year}", "Importes BOE publicados"),
