@@ -13,6 +13,7 @@ esios:
     force: false
 
   indicator_ids:
+    - 600
     - 28
     - 29
     - 30
