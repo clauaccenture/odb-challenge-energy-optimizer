@@ -3,10 +3,12 @@ pandas
 pyarrow
 boto3
 python-dotenv
+pyyaml
 duckdb
 pulp
 matplotlib
 plotly
 streamlit
-PyYAML
 tzdata
+ipykernel
+nbconvert

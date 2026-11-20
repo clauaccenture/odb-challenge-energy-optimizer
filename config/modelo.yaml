@@ -1,0 +1,11 @@
+# Ventana temporal y retardos comunes del dataset predictivo.
+model:
+  history_start: 2024-10-01
+  history_end: 2026-09-30
+  target_start: 2025-10-01
+  target_end: 2026-09-30
+  lag_days:
+    - 1
+    - 7
+    - 30
+    - 365

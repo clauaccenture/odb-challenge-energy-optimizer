@@ -1,0 +1,56 @@
+# Parametros especificos de la ingesta ESIOS.
+# Las credenciales y secretos se mantienen en .env.
+esios:
+  locale: es
+  timezone: Europe/Madrid
+
+  ingestion:
+    chunk_days: 30
+    max_workers: 3
+    retries: 4
+    timeout_seconds: 90
+    pause_seconds: 1
+    force: false
+
+  indicator_ids:
+    - 600
+    - 28
+    - 29
+    - 30
+    - 32
+    - 33
+    - 34
+    - 35
+    - 460
+    - 462
+    - 472
+    - 473
+    - 474
+    - 475
+    - 476
+    - 477
+    - 478
+    - 479
+    - 506
+    - 507
+    - 1844
+    - 1845
+    - 1846
+    - 1848
+    - 1849
+    - 1850
+    - 541
+    - 542
+    - 543
+    - 545
+    - 603
+    - 546
+    - 547
+    - 549
+    - 551
+    - 552
+    - 1297
+    - 2041
+    - 2051
+    - 570
+    - 623

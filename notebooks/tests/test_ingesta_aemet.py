@@ -127,7 +127,8 @@ class DailyIngestionTests(unittest.TestCase):
                 response.json.return_value = {"estado": body_status}
                 if http_status >= 400:
                     response.raise_for_status.side_effect = requests.HTTPError(str(http_status))
-                with patch.object(aemet.requests, "get", return_value=response):
+                with patch.object(aemet.requests, "get", return_value=response), \
+                        patch.object(aemet.time, "sleep"):
                     with self.assertRaises(error_type):
                         aemet.fetch(date(2026, 10, 22), date(2026, 10, 22))
 

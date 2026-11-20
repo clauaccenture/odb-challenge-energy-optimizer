@@ -1,0 +1,15 @@
+# Parametros especificos de la ingesta MIBGAS.
+mibgas:
+  timezone: Europe/Madrid
+  ingestion:
+    base_url: https://www.mibgas.es
+    language: es
+    file_path_template: /{language}/file-access/MIBGAS_Data_{year}.csv?path=AGNO_{year}/XLS
+    retries: 4
+    timeout_seconds: 90
+    pause_seconds: 1
+    force: false
+  product:
+    code: GDAES_D+1
+    place_of_delivery: PVB
+    area: ES

@@ -190,6 +190,9 @@ El objetivo no es reducir el consumo, sino mejorar la decisión de **cuándo con
 |---|---|---|---|---|
 | REData · Red Eléctrica | Hora, precio del mercado diario | API REST JSON sin token (`https://apidatos.ree.es/es/datos/mercados/precios-mercados-tiempo-real`) | 15/10/2026 | Red Eléctrica de España (REData) |
 | AEMET OpenData | Fecha, provincia, temperatura máxima, mínima y media, hora temperatura máxima y mínima | API REST con clave gratuita (`https://opendata.aemet.es`) | 18/10/2026 | Agencia Estatal de Meteorología (AEMET) |
+| MIBGAS | Producto diario D+1 para PVB, área ES | CSV anual oficial (`https://www.mibgas.es/es/file-access/`) | 2024, 2025 y 2026 | MIBGAS |
+
+La documentación detallada de MIBGAS está en [`docs/fuentes/mibgas.md`](docs/fuentes/mibgas.md). La justificación de la retirada de CNMC y la comparación realizada antes de eliminarla están en [`docs/fuentes/comparacion_cnmc_mibgas.md`](docs/fuentes/comparacion_cnmc_mibgas.md). MIBGAS es la única fuente operativa para completar la serie D+1 hasta el 30/09/2026.
 
 ## 4. Calidad de datos
 
@@ -526,7 +529,28 @@ ls -lh data/outputs/redata/ data/outputs/aemet/
 
 Para ejecutar el proyecto con **otro periodo**, basta con cambiar las fechas `--start` y `--end` de los pasos 1 y 2. Los valores esperados anteriores corresponden al periodo del 01/10/2025 al 30/09/2026.
 
-### 8.7. Dashboard Streamlit (opcional)
+### 8.7. Flujo de datos y configuración del modelo
+
+La configuración común de la ventana está en `config/modelo.yaml`. Los parámetros específicos de ESIOS y MIBGAS están separados en `config/esios.yaml` y `config/mibgas.yaml`. Los loaders viven en `src/config/`; los módulos de ingesta y calidad específicos están en `src/ingesta/` y `src/calidad/`.
+
+MIBGAS conserva los CSV anuales en `data/raw/mibgas/` y genera `data/processed/mibgas/mibgas_d1.json`, con cobertura validada del 01/10/2024 al 30/09/2026.
+
+Los notebooks se ejecutan desde la raiz del proyecto con el entorno virtual activado, abriendo y ejecutando sus celdas en orden:
+
+- `notebooks/01_ingesta_mibgas.ipynb`: descarga los CSV anuales oficiales de MIBGAS.
+- `notebooks/02_calidad_mibgas.ipynb`: filtra D+1 por fecha de entrega, normaliza precios, deduplica y calcula el informe de calidad.
+
+La ingesta real requiere conectividad con MIBGAS. Los tests no llaman a las fuentes externas y utilizan respuestas o ficheros simulados.
+
+### 8.8. Ejecutar las pruebas
+
+```powershell
+python -m unittest discover -s notebooks\tests -p "test_*.py" -v
+```
+
+Las pruebas escriben en directorios temporales y no descargan datos reales.
+
+### 8.9. Dashboard Streamlit (opcional)
 
 El proyecto incluye un dashboard desarrollado con Streamlit. Es una capa de
 visualización y no es necesaria para ejecutar el pipeline ni para obtener los
@@ -547,6 +571,6 @@ La configuración y ejecución en un entorno propio están en `app/README.md`.
 
 Mantener abiertas la consola de Streamlit y la ventana del túnel. Al terminar, cerrar el túnel con `Ctrl+C` y detener Streamlit solo si nadie más lo utiliza. No es necesario abrir puertos a Internet, instalar Python en el PC ni actualizar el código de la instancia.
 
-### 8.8. Uso de IA generativa
+### 8.10. Uso de IA generativa
 
 Se ha utilizado el asistente de IA Copilot, mediante una cuenta autorizada por la organización, como apoyo en: revisión y depuración del código de los scripts, redacción y revisión del README y de la guía de ejecución, apoyo en la demo de Streamlit. No se ha compartido información confidencial: todos los datos utilizados son abiertos. El código y los resultados generados con ayuda de la IA han sido revisados y verificados por el equipo, y cualquier miembro puede explicar cualquier parte del código y del análisis.

@@ -4,8 +4,10 @@ Descarga el JSON tal cual lo devuelve la API, UN FICHERO POR DIA, y lo guarda
 en data/raw/redata/ (cache local) y, si S3_BUCKET esta definido, en
 s3://<bucket>/raw/redata/. No se modifica nada del JSON original.
  
-Para el proyecto: 2025-10-01 -> 2026-09-30 = 365 ficheros
-(precios_2025-10-01_2025-10-01.json ... precios_2026-09-30_2026-09-30.json).
+Para el proyecto: 2024-10-01 -> 2026-09-30 = 730/731 ficheros
+(precios_2024-10-01_2024-10-01.json ... precios_2026-09-30_2026-09-30.json).
+El año adicional permite calcular precio_lag_1y para el periodo objetivo
+2025-10-01 -> 2026-09-30.
  
 Es reanudable: si un dia ya existe en data/raw/redata/ no se vuelve a descargar
 (solo se sube a S3 si hace falta). Usa --force para descargar de nuevo.
@@ -16,7 +18,7 @@ sin guardar un raw vacío ni hacer fallar la ejecución.
  
 Uso (desde la raiz del repo):
     python notebooks/01_ingesta_redata.py --start 2026-03-10 --end 2026-03-10 --preview --no-s3
-    python notebooks/01_ingesta_redata.py --start 2025-10-01 --end 2026-09-30
+    python notebooks/01_ingesta_redata.py --start 2024-10-01 --end 2026-09-30
 """
 import argparse
 import json
